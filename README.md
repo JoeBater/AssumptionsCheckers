@@ -27,7 +27,9 @@ Each diagnostic is implemented as a modular overlay, allowing:
 🚀 Getting started 
 
 git clone https://github.com/your-username/AssumptionsCheckers.git
+
 cd AssumptionsCheckers
+
 pip install -r requirements.txt
 
 📦 Structure
