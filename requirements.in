@@ -1,0 +1,17 @@
+# Core data wrangling and analysis
+pandas
+numpy
+
+# Machine learning and visualization
+scikit-learn
+statsmodels
+dtreeviz[all]
+matplotlib
+seaborn
+
+# Excel I/O support
+openpyxl
+
+# Communication and debugging utilities
+comm
+debugpy
