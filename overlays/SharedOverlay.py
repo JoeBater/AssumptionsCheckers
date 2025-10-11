@@ -20,14 +20,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class SharedOverlay:
-<<<<<<< HEAD
-    def __init__(self, df, target, visualize=False):
-        self.df = df
-        self.target = target
-        self.visualize = visualize
-        self.X = df.drop(columns=[target])
-        self.y = df[target]
-=======
     def __init__(self, df, target, visualize=False, missingness_threshold=0.5):
         self.df = df
         self.target = target
@@ -46,13 +38,11 @@ class SharedOverlay:
                 + "\nConsider imputation or removing rows/columns with excessive missingness."
             )
             print(self.report["missing_data"])
->>>>>>> 0b2164182091cf49616fa8052c19e8d2177a5ba3
 
     # =======================================
     # Individual checks
     # =======================================
     
-<<<<<<< HEAD
     def check_scaling_need(self, threshold=10):
         stds = self.X.std()
         ratio = stds.max() / stds.min()
@@ -61,61 +51,6 @@ class SharedOverlay:
             "scaling_needed": ratio > threshold,
             "std_ratio": ratio,
             "notes": "Scaling recommended." if ratio > threshold else "Feature scales are aligned."
-=======
-    def check_missingness(self):
-        return {
-            "missingness": self.pc_missing,
-            "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
-            "notes": (
-                f"Data contains {self.pc_missing * 100:.2f}% missing values. "
-                "Tests will run on unmissing subset. Consider imputation or dropping rows/columns with excessive missingness."
-                if self.pc_missing > 0 else "No missing data detected."
-            )
-        }
-
-    def check_scaling(self, threshold=10.0):
-        """
-        Checks for feature scaling issues by comparing ranges and standard deviations.
-
-        Parameters:
-        - threshold: float, ratio above which scaling inconsistency is flagged
-
-        Returns:
-        - dict with scaling flag, feature ranges, stds, and max ratio
-        """
-        # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
-        y = df_to_use[self.target]
-
-        X = X.values if isinstance(X, pd.DataFrame) else X
-        X = np.array(X)
-        y = y.values if isinstance(y, pd.Series) else y
-        
-        
-
-        # Compute range and std per feature
-        feature_ranges = np.ptp(X, axis=0)  # peak-to-peak (max - min)
-        feature_stds = np.std(X, axis=0)
-
-        # Avoid divide-by-zero
-        safe_ranges = np.where(feature_ranges == 0, 1e-8, feature_ranges)
-        safe_stds = np.where(feature_stds == 0, 1e-8, feature_stds)
-
-        range_ratio = np.max(safe_ranges) / np.min(safe_ranges)
-        std_ratio = np.max(safe_stds) / np.min(safe_stds)
-        is_unscaled = range_ratio > threshold or std_ratio > threshold
-
-        return {
-            "is_unscaled": is_unscaled,
-            "range_ratio": round(range_ratio, 2),
-            "std_ratio": round(std_ratio, 2),
-            "threshold": threshold,
-            "notes": (
-                "Scaling recommended due to inconsistent feature magnitudes."
-                if is_unscaled else "Feature scales appear aligned."
-            )
->>>>>>> 0b2164182091cf49616fa8052c19e8d2177a5ba3
         }
 
     
@@ -296,12 +231,8 @@ class SharedOverlay:
         Returns:
         - dict with scaling flag, feature ranges, stds, and max ratio
         """
-<<<<<<< HEAD
-        X_df = self.X.select_dtypes(include=[np.number])
-=======
         X = self.df.drop(columns=[self.target])
         X_df = X.select_dtypes(include=[np.number]) # Only numeric columns
->>>>>>> 0b2164182091cf49616fa8052c19e8d2177a5ba3
         X = X_df.values
 
         if np.isnan(X).any():
