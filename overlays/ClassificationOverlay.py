@@ -21,43 +21,51 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class ClassificationOverlay:
-    def __init__(self, df, target=None, coverage_threshold=0.5, visualize=False):
+    def __init__(self, df, target=None, visualize=False, custom_missing_values=None, missingness_threshold=0.5):
         self.df = df
         self.target = target
-        self.visualize = visualize
-        self.coverage_threshold = coverage_threshold
+        self.visualize = visualize # not used currently
+        self.report = {}
+        self.pc_missing = 0.0
+        self.missingness_threshold = missingness_threshold
 
         # Replace common string missing tokens with np.nan
-        self.X = df.drop(columns=[target]).copy()
-        self.X.replace(to_replace=["na", "NA", "NaN", "missing", "?"], value=np.nan, inplace=True)
-        self.y = df[target]
-
-        # Missingness diagnostics
-        self.X_complete = self.X.dropna()
-        self.y_complete = self.y.loc[self.X_complete.index]
-        self.coverage = len(self.X_complete) / len(self.X)
-        self.has_missing = self.X.isna().any().any()
-        self.missingness_note = (
-            f"Only {self.coverage:.1%} of data is complete — some diagnostics may be skipped or caveated."
-            if self.has_missing else "No missing values detected."
-        )
+        default_missing_values = ["na", "NA", "NaN", "missing", "?", ".", "-999", "-9999"]
+        missing_values = set(custom_missing_values) if custom_missing_values else set(default_missing_values)   
+        self.df.replace(to_replace=missing_values, value=np.nan, inplace=True)
+        self.df_no_missing = self.df.dropna()
+        if self.df.isnull().any().any():
+            self.pc_missing = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
+            self.report["missing_data"] =  (
+                f"Warning: Data contains missing values ({self.pc_missing* 100:.2f}%). "
+                + "\nTests will run on unmissing subset. Results may not generalize. "
+                + "\nConsider imputation or removing rows/columns with excessive missingness."
+            )
+            print(self.report["missing_data"])
 
 
     def check_separability(self, method="pca", perplexity=30, random_state=1223):
         """
         Projects features into 2D and checks class separability visually and via overlap metrics.
         """
-        if self.coverage < self.coverage_threshold:
+        if self.pc_missing > self.missingness_threshold:
+            self.report["missing_data"] = (
+                f"Error: Over {self.pc_missing:.2f}% of data is missing. "
+                "\nSeparability test cannot proceed."
+            )
             return {
                 "method": method,
                 "separable": False,
                 "overlap_score": None,
-                "notes": f"Only {self.coverage:.1%} of data is complete — separability check skipped.",
+                "notes": f"Only {self.pc_missing:.1%} of data is complete — separability check skipped.",
+                "data_used": None,
                 "recommendation": "Consider imputation or model-aware handling before assessing separability."
             }
 
-        X = self.X_complete.values
-        y = self.y_complete.values
+        # Use unmissing data only if missingness exists
+        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
+        X = df_to_use.drop(columns=[self.target])
+        y = df_to_use[self.target]
 
         reducer = TSNE(n_components=2, perplexity=perplexity, random_state=random_state) if method == "tsne" else PCA(n_components=2)
         X_proj = reducer.fit_transform(X)
@@ -83,8 +91,8 @@ class ClassificationOverlay:
             plt.show()
 
         notes = (
-            f"{self.missingness_note} Classes appear well-separated in 2D projection."
-            if separable else f"{self.missingness_note} Significant class overlap — linear models may struggle."
+            f"Classes appear well-separated in 2D projection."
+            if separable else f"Significant class overlap — linear models may struggle."
         ).strip()
 
         recommendation = (
@@ -97,6 +105,7 @@ class ClassificationOverlay:
             "overlap_score": round(overlap_score, 3),
             "separable": separable,
             "notes": notes,
+            "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
             "recommendation": recommendation,
             "projection": df_proj.to_dict(orient="records")
         }
@@ -108,16 +117,23 @@ class ClassificationOverlay:
         """
         Checks for redundant features via correlation and mutual information clustering.
         """
-        if self.coverage < self.coverage_threshold:
+        if self.pc_missing > self.missingness_threshold:
+            self.report["missing_data"] = (
+                f"Error: Over {self.pc_missing:.2f}% of data is missing. "
+                "\nSeparability test cannot proceed."
+            )
             return {
                 "redundant_pairs": None,
                 "mutual_info_scores": None,
-                "notes": f"Only {self.coverage:.1%} of data is complete — redundancy check skipped.",
+                "notes": f"Only {1.0 - self.pc_missing:.1%} of data is complete — redundancy check skipped.",
+                "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
                 "recommendation": "Consider imputation or column pruning before assessing redundancy."
             }
 
-        X = self.X_complete.copy()
-        y = self.y_complete.copy()
+        # Use unmissing data only if missingness exists
+        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
+        X = df_to_use.drop(columns=[self.target])
+        y = df_to_use[self.target]
 
         for col in X.select_dtypes(include=["object", "category"]).columns:
             X[col] = LabelEncoder().fit_transform(X[col])
@@ -142,8 +158,8 @@ class ClassificationOverlay:
             plt.show()
 
         notes = (
-            f"{self.missingness_note} {len(redundant_pairs)} highly correlated feature pairs detected."
-            if redundant_pairs else f"{self.missingness_note} No severe feature redundancy detected."
+            f"{len(redundant_pairs)} highly correlated feature pairs detected."
+            if redundant_pairs else f"No severe feature redundancy detected."
         ).strip()
 
         recommendation = (
@@ -155,5 +171,6 @@ class ClassificationOverlay:
             "redundant_pairs": redundant_pairs,
             "mutual_info_scores": mi_scores,
             "notes": notes,
+            "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
             "recommendation": recommendation
         }

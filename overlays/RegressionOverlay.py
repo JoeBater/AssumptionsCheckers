@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class RegressionOverlay:
-    def __init__(self, df, target, visualize=False, missingness_threshold=0.5):
+    def __init__(self, df, target, visualize=False, custom_missing_values=None, missingness_threshold=0.5):
         self.df = df
         self.target = target
         self.visualize = visualize # not used currently
@@ -29,6 +29,9 @@ class RegressionOverlay:
         self.missingness_threshold = missingness_threshold
 
         # Check for missing data
+        default_missing_values = ["na", "NA", "NaN", "missing", "?", ".", "-999", "-9999"]
+        missing_values = set(custom_missing_values) if custom_missing_values else set(default_missing_values)   
+        self.df.replace(to_replace=missing_values, value=np.nan, inplace=True)
         self.df_no_missing = self.df.dropna()
         if self.df.isnull().any().any():
             self.pc_missing = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
