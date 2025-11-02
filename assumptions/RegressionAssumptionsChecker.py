@@ -29,7 +29,10 @@ class RegressionAssumptionsChecker:
         """Run relevant checks depending on algorithm."""
         self.results = {}
 
-        if self.algorithm in ["LinearRegression", "Ridge", "Lasso", "ElasticNet"]:
+        if self.algorithm is None:
+            self.recommend_models()
+
+        elif self.algorithm in ["LinearRegression", "Ridge", "Lasso", "ElasticNet"]:
             self.results["linearity"] = self.regression_overlay.check_linearity()
             self.results["multicollinearity"] = self.regression_overlay.check_multicollinearity()
             self.results["homoscedasticity"] = self.regression_overlay.check_heteroscedasticity()
@@ -84,13 +87,37 @@ class RegressionAssumptionsChecker:
         self.report["assumptions"] = self.results
         return self.results
 
+    def recommend_models(self):
+
+        self.results["linearity"] = self.regression_overlay.check_linearity()
+        self.results["multicollinearity"] = self.regression_overlay.check_multicollinearity()
+        self.results["homoscedasticity"] = self.regression_overlay.check_heteroscedasticity()
+        self.results["scaling"] = self.overlay.check_scaling()
+        self.results["normality"] = self.regression_overlay.check_residual_normality()
+        self.results["tree_suitability"] = self.overlay.check_tree_suitability()
+
+        cautions = []
+        if self.results.get("multicollinearity", False):
+            cautions.append("Avoid LogisticRegression without regularization due to multicollinearity.")
+        if self.results.get("class_imbalance", False):
+            cautions.append("Consider models with class_weight support (e.g., RandomForest, SVR with weights).")
+        if self.results.get("scaling_issues", False):
+            cautions.append("Standardize features before using SVR, KNN, or LogisticRegression.")
+        if self.results.get("separability", False):
+            cautions.append("Linear models may struggle; consider tree-based or kernel methods.")
+        if self.results.get("tree_suitability", False):
+            cautions.append("Tree models may struggle.")
+        return cautions
 
     def help_algorithms(self):
         print('RegressionAssumptionsChecker')
-        print('Checks data assumptions (linearity, multicolinearity, heteroscedasticity) for the algorithms:')
+        print('Checks linearity, multicolinearity, heteroscedasticity assumptions for the algorithms:')
         print('LinearRegression, Ridge, Lasso, ElasticNet')
+        print('Checks scaling for:')
         print('SVR, KNeighborsRegressor')
+        print('Checks tree-suitability for:')
         print('DecisionTreeRegressor, RandomForestRegressor, GradientBoostingRegressor')
+        print("Use 'None' to run all checks and make recommendations")
 
     def export_report(self, format="dict"):
         if format == "json":
