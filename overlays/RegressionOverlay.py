@@ -193,11 +193,20 @@ class RegressionOverlay:
                 "recommendation": "Rebuild feature set to avoid linear dependence.",
                 "drop_set": drop_set
             }
-        
-        recommendation = (
-            f"High or perfect multicollinearity detected. "
-            f"Consider removing these features: {drop_set}" if drop_set else None
-        )
+
+        recommendation = []
+        if drop_set:
+            recommendation.append(
+                f"High multicollinearity detected. Consider removing these features: {drop_set}"
+            )
+            recommendation.append(
+                "Alternatively, use Ridge regression to mitigate multicollinearity without dropping predictors."
+            )
+            if X.shape[1] >= 10:
+                recommendation.append(
+                    "If you suspect some predictors are irrelevant, Lasso regression can perform automatic feature selection."
+                )
+
         return {
             "multicollinearity": len(drop_set) == 0,
             "details": vif_data.to_dict(orient="records"),
@@ -205,9 +214,10 @@ class RegressionOverlay:
                 "Perfect or high multicollinearity detected" if drop_set 
                 else "No severe multicollinearity."
             ),
-            "recommendation": recommendation,
+            "recommendation": " ".join(recommendation) if recommendation else "No action needed.",
             "drop_set": drop_set
         }
+
 
 
 
