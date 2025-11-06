@@ -19,6 +19,8 @@ from scipy.spatial.distance import pdist
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from .ScalingOverlay import ScalingOverlay
+
 class SharedOverlay:
     def __init__(self, df, target, visualize=False, missingness_threshold=0.5):
         self.df = df
@@ -42,17 +44,6 @@ class SharedOverlay:
     # =======================================
     # Individual checks
     # =======================================
-    
-    def check_scaling_need(self, threshold=10):
-        stds = self.X.std()
-        ratio = stds.max() / stds.min()
-
-        return {
-            "scaling_needed": ratio > threshold,
-            "std_ratio": ratio,
-            "notes": "Scaling recommended." if ratio > threshold else "Feature scales are aligned."
-        }
-
     
 
     def check_multicollinearity(self, threshold=10):
@@ -223,70 +214,112 @@ class SharedOverlay:
     
     def check_scaling(self, threshold=10.0):
         """
-        Checks for feature scaling issues by comparing ranges and standard deviations.
+        Comprehensive scaling check using both ranges and standard deviations.
+        Includes scaling method recommendations when scaling is needed.
 
         Parameters:
         - threshold: float, ratio above which scaling inconsistency is flagged
 
         Returns:
-        - dict with scaling flag, feature ranges, stds, and max ratio
+        - dict with scaling flag, ratios, feature details, recommendations, and notes
         """
         X = self.df.drop(columns=[self.target])
-        X_df = X.select_dtypes(include=[np.number]) # Only numeric columns
-        X = X_df.values
-
-        if np.isnan(X).any():
+        X_numeric = X.select_dtypes(include=[np.number])
+        
+        if X_numeric.empty:
             return {
-                "is_scaled": True,
-                "details": None,
+                "scaling_needed": False,
+                "notes": "No numeric features found — scaling not applicable."
+            }
+
+        # Handle missing values
+        if X_numeric.isnull().any().any():
+            return {
+                "scaling_needed": None,
                 "notes": "Missing values detected — scaling check skipped.",
                 "recommendation": "Impute or remove missing values before checking scaling."
             }
 
-        if np.isinf(X).any():
+        # Handle infinite values
+        if np.isinf(X_numeric.values).any():
             return {
-                "is_scaled": True,
-                "details": None,
+                "scaling_needed": None,
                 "notes": "Infinite values detected — scaling check skipped.",
                 "recommendation": "Replace or remove infinite values before checking scaling."
             }
         
-        # Compute range and std per feature
-        feature_ranges = np.ptp(X, axis=0)  # peak-to-peak (max - min)
-        feature_stds = np.std(X, axis=0)
+        # Compute statistics
+        feature_ranges = X_numeric.max() - X_numeric.min()
+        feature_stds = X_numeric.std()
+        
+        # Filter out zero variance features
+        nonzero_stds = feature_stds[feature_stds > 0]
+        nonzero_ranges = feature_ranges[feature_ranges > 0]
 
-        # Avoid divide-by-zero
-        safe_ranges = np.where(feature_ranges == 0, 1e-8, feature_ranges)
-        safe_stds = np.where(feature_stds == 0, 1e-8, feature_stds)
+        if nonzero_stds.empty:
+            return {
+                "scaling_needed": False,
+                "notes": "All features have zero variance — scaling not applicable."
+            }
 
-        range_ratio = np.max(safe_ranges) / np.min(safe_ranges)
-        std_ratio = np.max(safe_stds) / np.min(safe_stds)
-        is_unscaled = range_ratio > threshold or std_ratio > threshold
+        # Calculate ratios
+        std_ratio = nonzero_stds.max() / nonzero_stds.min()
+        range_ratio = nonzero_ranges.max() / nonzero_ranges.min() if not nonzero_ranges.empty else 1.0
+        
+        # Determine if scaling is needed
+        scaling_needed = std_ratio > threshold or range_ratio > threshold
+        
+        # Get feature names for detailed reporting
+        max_std_feature = nonzero_stds.idxmax()
+        min_std_feature = nonzero_stds.idxmin()
+        
+        # Build notes
+        notes = (
+            f"Feature '{max_std_feature}' has a standard deviation {std_ratio:.1f}× larger than '{min_std_feature}'. "
+        )
+        
+        if scaling_needed:
+            # Get scaling method recommendation from ScalingOverlay
+            scaling_overlay = ScalingOverlay(X, threshold=int(threshold))
+            scaler_recommendation = scaling_overlay.recommend_scaler()
+            
+            notes += (
+                "Scaling is recommended to align feature influence. "
+                f"Recommended scaler: {scaler_recommendation['recommended_scaler']}. "
+                f"{scaler_recommendation['rationale']}"
+            )
+        else:
+            notes += "Feature scales are reasonably aligned — scaling optional."
 
+        # Visualization if requested
         if self.visualize:
-            fig, ax = plt.subplots(1, 2, figsize=(10, 4))
-            ax[0].bar(range(len(feature_ranges)), feature_ranges, color='teal')
+            fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+            
+            ax[0].bar(range(len(feature_ranges)), feature_ranges.values, color='teal')
             ax[0].set_title("Feature Ranges")
             ax[0].set_xlabel("Feature Index")
             ax[0].set_ylabel("Range")
+            ax[0].set_xticks(range(len(feature_ranges)))
+            ax[0].set_xticklabels(feature_ranges.index, rotation=45, ha='right')
 
-            ax[1].bar(range(len(feature_stds)), feature_stds, color='orange')
+            ax[1].bar(range(len(feature_stds)), feature_stds.values, color='orange')
             ax[1].set_title("Feature Standard Deviations")
             ax[1].set_xlabel("Feature Index")
             ax[1].set_ylabel("Std Dev")
+            ax[1].set_xticks(range(len(feature_stds)))
+            ax[1].set_xticklabels(feature_stds.index, rotation=45, ha='right')
 
             plt.tight_layout()
             plt.show()
 
         return {
-            "is_unscaled": is_unscaled,
-            "range_ratio": round(range_ratio, 2),
+            "scaling_needed": scaling_needed,
             "std_ratio": round(std_ratio, 2),
+            "range_ratio": round(range_ratio, 2),
+            "max_std_feature": max_std_feature,
+            "min_std_feature": min_std_feature,
             "threshold": threshold,
-            "notes": (
-                "Scaling recommended due to inconsistent feature magnitudes."
-                if is_unscaled else "Feature scales appear aligned."
-            )
+            "notes": notes
         }
 
 
