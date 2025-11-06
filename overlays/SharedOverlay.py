@@ -102,14 +102,19 @@ class SharedOverlay:
                     try:
                         vif = variance_inflation_factor(data.values, i)
                     except np.linalg.LinAlgError:
-                        vif = float("inf")  # or np.nan if you prefer
+                        vif = float("inf")
                     except ValueError:
-                        vif = None
+                        vif = float("inf")  # Use inf instead of None for consistency
                     vifs.append(vif)
-                return pd.DataFrame({
-                    "feature": data.columns,
+                
+                # Explicitly create DataFrame with proper types
+                df = pd.DataFrame({
+                    "feature": data.columns.tolist(),
                     "VIF": vifs
                 })
+                # Ensure VIF column is numeric
+                df["VIF"] = pd.to_numeric(df["VIF"], errors='coerce')
+                return df
 
         vif_data = compute_vif(X)
         too_high = vif_data[vif_data["VIF"] > threshold]
@@ -119,7 +124,9 @@ class SharedOverlay:
 
         while not too_high.empty and X_temp.shape[1] > 1:
             # choose feature with highest VIF to drop
-            to_drop = too_high.sort_values("VIF", ascending=False)["feature"].iloc[0]
+            # Use explicit indexing to avoid type checker issues
+            max_vif_idx = too_high["VIF"].idxmax()
+            to_drop = too_high.loc[max_vif_idx, "feature"]
             drop_set.append(to_drop)
             X_temp = X_temp.drop(columns=[to_drop])
 
