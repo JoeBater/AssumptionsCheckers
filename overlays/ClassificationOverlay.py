@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class ClassificationOverlay:
-    def __init__(self, df, target=None, visualize=False, custom_missing_values=None, missingness_threshold=0.5):
+    def __init__(self, df, target=None, visualize=False, custom_missing_values=None, missingness_threshold=0.5, suppress_missing_warnings=False):
         self.df = df
         self.target = target
         self.visualize = visualize # not used currently
@@ -41,12 +41,15 @@ class ClassificationOverlay:
                 + "\nTests will run on unmissing subset. Results may not generalize. "
                 + "\nConsider imputation or removing rows/columns with excessive missingness."
             )
-            print(self.report["missing_data"])
+            # Only print if not suppressed (for when we handle missingness centrally)
+            if not suppress_missing_warnings:
+                print(self.report["missing_data"])
 
 
     def check_separability(self, method="pca", perplexity=30, random_state=1223):
         """
         Projects features into 2D and checks class separability visually and via overlap metrics.
+        Returns spatial relationships analysis instead of raw projection data.
         """
         if self.pc_missing > self.missingness_threshold:
             self.report["missing_data"] = (
@@ -74,14 +77,20 @@ class ClassificationOverlay:
         df_proj["label"] = y
 
         centroids = df_proj.groupby("label")[["dim1", "dim2"]].mean()
-        spreads = df_proj.groupby("label")[["dim1", "dim2"]].std()
+        spreads = df_proj.groupby("label")[["dim1", "dim2"]].std().mean(axis=1)  # Average spread across dimensions
 
         centroid_distances = pdist(centroids.values)
         mean_centroid_dist = np.mean(centroid_distances)
-        mean_spread = spreads.values.mean()
+        mean_spread = spreads.mean()
 
         overlap_score = mean_spread / mean_centroid_dist if mean_centroid_dist > 0 else float("inf")
         separable = overlap_score < 0.5
+
+        # Generate spatial relationship description
+        relationship_desc = self._generate_spatial_description(method, centroids, spreads, mean_centroid_dist, mean_spread, separable)
+        
+        # Generate class summary table
+        class_summary = self._generate_class_summary_table(centroids, spreads, centroid_distances)
 
         if self.visualize:
             plt.figure(figsize=(8, 6))
@@ -89,11 +98,6 @@ class ClassificationOverlay:
             plt.title(f"Class Separability ({method.upper()} projection)")
             plt.tight_layout()
             plt.show()
-
-        notes = (
-            f"Classes appear well-separated in 2D projection."
-            if separable else f"Significant class overlap — linear models may struggle."
-        ).strip()
 
         recommendation = (
             "Linear models may be viable." if separable
@@ -104,11 +108,78 @@ class ClassificationOverlay:
             "method": method,
             "overlap_score": round(overlap_score, 3),
             "separable": separable,
-            "notes": notes,
+            "spatial_description": relationship_desc,
+            "class_summary": class_summary,
             "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
-            "recommendation": recommendation,
-            "projection": df_proj.to_dict(orient="records")
+            "recommendation": recommendation
         }
+
+    def _generate_spatial_description(self, method, centroids, spreads, mean_centroid_dist, mean_spread, separable):
+        """Generate descriptive text about spatial relationships between class centroids."""
+        method_name = method.upper()
+        
+        if separable:
+            clustering_desc = "well-separated"
+            overlap_desc = "minimal overlap"
+            distance_desc = "high relative to within-class spread"
+        else:
+            clustering_desc = "tightly clustered"
+            overlap_desc = "significant overlap"
+            distance_desc = "low relative to within-class spread"
+        
+        return (
+            f"In the {method_name} projection, class centroids are {clustering_desc} with {overlap_desc}. "
+            f"The average inter-class distance is {distance_desc}, suggesting "
+            f"{'good' if separable else 'poor'} separability."
+        )
+
+    def _generate_class_summary_table(self, centroids, spreads, centroid_distances):
+        """Generate a summary table of class centroids, spreads, and overlap notes."""
+        import itertools
+        from scipy.spatial.distance import cdist
+        
+        class_summary = []
+        classes = centroids.index.tolist()
+        
+        # Calculate pairwise distances for overlap detection
+        centroid_matrix = centroids.values
+        pairwise_distances = cdist(centroid_matrix, centroid_matrix)
+        
+        for i, class_label in enumerate(classes):
+            centroid = centroids.loc[class_label]
+            spread = spreads.loc[class_label]
+            
+            # Find overlapping classes (those within 2 * spread distance)
+            overlap_threshold = 2 * spread
+            overlapping_classes = []
+            
+            for j, other_class in enumerate(classes):
+                if i != j and pairwise_distances[i, j] < overlap_threshold:
+                    overlapping_classes.append(str(other_class))
+            
+            # Generate notes
+            if overlapping_classes:
+                notes = f"Overlaps with {', '.join(overlapping_classes)}"
+            else:
+                if len(classes) > 1:
+                    # Find nearest class
+                    distances_to_others = [pairwise_distances[i, j] for j in range(len(classes)) if i != j]
+                    min_distance = min(distances_to_others)
+                    if min_distance > 3 * spread:
+                        notes = "Well isolated"
+                    else:
+                        notes = "Slightly distinct"
+                else:
+                    notes = "Single class"
+            
+            class_summary.append({
+                "Class": class_label,
+                "Centroid (dim1, dim2)": f"({centroid.iloc[0]:.1f}, {centroid.iloc[1]:.1f})",
+                "Spread": f"{spread:.1f}",
+                "Notes": notes
+            })
+        
+        return class_summary
 
 
 

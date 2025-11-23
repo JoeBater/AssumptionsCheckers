@@ -22,7 +22,7 @@ import seaborn as sns
 from .ScalingOverlay import ScalingOverlay
 
 class SharedOverlay:
-    def __init__(self, df, target, visualize=False, missingness_threshold=0.5):
+    def __init__(self, df, target, visualize=False, missingness_threshold=0.5, suppress_missing_warnings=False):
         self.df = df
         self.target = target
         self.visualize = visualize
@@ -39,7 +39,9 @@ class SharedOverlay:
                 + "\nTests will run on unmissing subset. Results may not generalize. "
                 + "\nConsider imputation or removing rows/columns with excessive missingness."
             )
-            print(self.report["missing_data"])
+            # Only print if not suppressed (for when we handle missingness centrally)
+            if not suppress_missing_warnings:
+                print(self.report["missing_data"])
 
     # =======================================
     # Individual checks
