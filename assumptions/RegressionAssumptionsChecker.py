@@ -152,26 +152,154 @@ class RegressionAssumptionsChecker:
         return self.results
 
     def recommend_models(self):
-
+        """
+        Recommend regression algorithms ordered by suitability based on assumption checks.
+        Returns a list of dicts with algorithm, suitability, reason, and notes.
+        """
         self.results["linearity"] = self.regression_overlay.check_linearity()
         self.results["multicollinearity"] = self.regression_overlay.check_multicollinearity()
         self.results["homoscedasticity"] = self.regression_overlay.check_heteroscedasticity()
         self.results["scaling"] = self.overlay.check_scaling()
         self.results["normality"] = self.regression_overlay.check_residual_normality()
         self.results["tree_suitability"] = self.overlay.check_tree_suitability()
-
-        cautions = []
-        if self.results.get("multicollinearity", False):
-            cautions.append("Avoid LogisticRegression without regularization due to multicollinearity.")
-        if self.results.get("class_imbalance", False):
-            cautions.append("Consider models with class_weight support (e.g., RandomForest, SVR with weights).")
-        if self.results.get("scaling_issues", False):
-            cautions.append("Standardize features before using SVR, KNN, or LogisticRegression.")
-        if self.results.get("separability", False):
-            cautions.append("Linear models may struggle; consider tree-based or kernel methods.")
-        if self.results.get("tree_suitability", False):
-            cautions.append("Tree models may struggle.")
-        return cautions
+        
+        # Extract check results
+        linearity = self.results.get("linearity", {})
+        is_linear = linearity.get("linearity", False) if isinstance(linearity, dict) else linearity
+        
+        multicollinearity = self.results.get("multicollinearity", {})
+        has_multicollinearity = not multicollinearity.get("multicollinearity", True) if isinstance(multicollinearity, dict) else False
+        
+        homoscedasticity = self.results.get("homoscedasticity", {})
+        is_homoscedastic = homoscedasticity.get("homoscedasticity", False) if isinstance(homoscedasticity, dict) else False
+        
+        scaling = self.results.get("scaling", {})
+        scaling_needed = scaling.get("scaling_needed", False) if isinstance(scaling, dict) else False
+        
+        normality = self.results.get("normality", {})
+        is_normal = normality.get("normality", False) if isinstance(normality, dict) else False
+        
+        tree_suitability = self.results.get("tree_suitability", {})
+        trees_suitable = tree_suitability.get("tree_suitability", False) if isinstance(tree_suitability, dict) else False
+        
+        recommendations = []
+        
+        # RandomForestRegressor - robust ensemble
+        rf_suitability = "high" if trees_suitable else "medium"
+        rf_notes = ["No scaling required", "Handles nonlinearity well"]
+        if has_multicollinearity:
+            rf_notes.append("Robust to multicollinearity")
+        rf_reason = "Robust ensemble method handles nonlinearity and complex patterns." if trees_suitable else "Good general-purpose method but data characteristics may limit performance."
+        recommendations.append({
+            "algorithm": "RandomForestRegressor",
+            "suitability": rf_suitability,
+            "reason": rf_reason,
+            "notes": rf_notes
+        })
+        
+        # GradientBoostingRegressor - powerful ensemble
+        gb_suitability = "high" if trees_suitable else "medium"
+        gb_notes = ["No scaling required", "Strong predictive power", "Requires hyperparameter tuning"]
+        gb_reason = "Powerful ensemble with excellent generalization." if trees_suitable else "Effective but data characteristics may require careful tuning."
+        recommendations.append({
+            "algorithm": "GradientBoostingRegressor",
+            "suitability": gb_suitability,
+            "reason": gb_reason,
+            "notes": gb_notes
+        })
+        
+        # LinearRegression - best case scenario
+        lr_suitability = "high" if (is_linear and is_homoscedastic and not has_multicollinearity) else "low"
+        lr_notes = ["Requires scaling" if scaling_needed else "Scaling optional"]
+        if has_multicollinearity:
+            lr_notes.append("High multicollinearity detected - model will be unstable")
+        if not is_homoscedastic:
+            lr_notes.append("Heteroscedasticity detected")
+        if not is_linear:
+            lr_notes.append("Nonlinearity detected")
+        lr_reason = "Ideal when linearity and homoscedasticity assumptions hold." if (is_linear and is_homoscedastic) else "Assumptions violated; consider regularized or nonlinear alternatives."
+        recommendations.append({
+            "algorithm": "LinearRegression",
+            "suitability": lr_suitability,
+            "reason": lr_reason,
+            "notes": lr_notes
+        })
+        
+        # Ridge - handles multicollinearity
+        ridge_suitability = "high" if has_multicollinearity else "medium"
+        ridge_notes = ["Requires scaling", "Handles multicollinearity via L2 regularization"]
+        if not is_homoscedastic:
+            ridge_notes.append("More robust to heteroscedasticity than OLS")
+        ridge_reason = "Ridge regression controls multicollinearity through regularization." if has_multicollinearity else "Regularized linear model with good bias-variance tradeoff."
+        recommendations.append({
+            "algorithm": "Ridge",
+            "suitability": ridge_suitability,
+            "reason": ridge_reason,
+            "notes": ridge_notes
+        })
+        
+        # Lasso - feature selection
+        lasso_suitability = "medium" if has_multicollinearity else "medium"
+        lasso_notes = ["Requires scaling", "Performs feature selection via L1 regularization"]
+        if has_multicollinearity:
+            lasso_notes.append("Can select among correlated features")
+        recommendations.append({
+            "algorithm": "Lasso",
+            "suitability": lasso_suitability,
+            "reason": "L1 regularization enables automatic feature selection.",
+            "notes": lasso_notes
+        })
+        
+        # ElasticNet - combines Ridge and Lasso
+        elasticnet_notes = ["Requires scaling", "Combines L1 and L2 regularization"]
+        if has_multicollinearity:
+            elasticnet_notes.append("Good balance for correlated features")
+        recommendations.append({
+            "algorithm": "ElasticNet",
+            "suitability": "medium",
+            "reason": "Combines L1 and L2 regularization for balanced feature handling.",
+            "notes": elasticnet_notes
+        })
+        
+        # SVR - needs scaling
+        svr_suitability = "medium" if scaling_needed else "high"
+        svr_notes = ["Requires StandardScaler or RBF scaler", "Effective for nonlinear patterns"]
+        if not is_linear:
+            svr_notes.append("RBF kernel handles nonlinearity well")
+        svr_reason = "Kernel methods handle nonlinearity effectively with proper scaling." if scaling_needed else "Strong choice for nonlinear regression."
+        recommendations.append({
+            "algorithm": "SVR",
+            "suitability": svr_suitability,
+            "reason": svr_reason,
+            "notes": svr_notes
+        })
+        
+        # KNeighborsRegressor - needs scaling
+        knn_suitability = "low" if scaling_needed else "medium"
+        knn_notes = ["Requires feature scaling", "Distance-based method", "Sensitive to feature scale differences"]
+        knn_reason = "Distance-based approach requires careful scaling." if scaling_needed else "Can be effective but requires proper scaling."
+        recommendations.append({
+            "algorithm": "KNeighborsRegressor",
+            "suitability": knn_suitability,
+            "reason": knn_reason,
+            "notes": knn_notes
+        })
+        
+        # DecisionTreeRegressor - simple baseline
+        dt_notes = ["No scaling required", "Interpretable results", "Prone to overfitting"]
+        recommendations.append({
+            "algorithm": "DecisionTreeRegressor",
+            "suitability": "medium",
+            "reason": "Simple baseline; consider ensemble methods for better performance.",
+            "notes": dt_notes
+        })
+        
+        # Sort by suitability (high > medium > low > unsuitable)
+        suitability_order = {"high": 3, "medium": 2, "low": 1, "unsuitable": 0}
+        recommendations.sort(key=lambda x: suitability_order.get(x["suitability"], 0), reverse=True)
+        
+        self.report["recommendations"] = recommendations
+        return recommendations
 
     def help_algorithms(self):
         print('RegressionAssumptionsChecker')
@@ -223,7 +351,11 @@ class RegressionAssumptionsChecker:
                 print(result)
 
         if "recommendations" in self.report:
-            print("\n⚠️ Model Recommendations")
+            print("\n⚠️ Model Recommendations (ordered by suitability)")
             print("-" * 30)
             for rec in self.report["recommendations"]:
-                print(f"- {rec}")
+                print(f"\n• {rec['algorithm']} [{rec['suitability'].upper()}]")
+                print(f"  Reason: {rec['reason']}")
+                if rec.get('notes'):
+                    for note in rec['notes']:
+                        print(f"  - {note}")
