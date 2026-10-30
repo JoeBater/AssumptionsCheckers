@@ -2,6 +2,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 DEFAULT_MISSING_TOKENS = ["na", "NA", "NaN", "missing", "?", ".", "-999", "-9999"]
@@ -63,12 +64,15 @@ def split_numeric(X):
 
 
 def _vif_table(X):
+    # variance_inflation_factor regresses on the other exog columns as given, so it needs an
+    # explicit intercept; without one, any feature with a non-zero mean gets a huge VIF.
+    exog = sm.add_constant(X, has_constant="add").values
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         vifs = []
-        for i in range(X.shape[1]):
+        for i in range(1, exog.shape[1]):  # column 0 is the intercept
             try:
-                vifs.append(variance_inflation_factor(X.values, i))
+                vifs.append(variance_inflation_factor(exog, i))
             except (np.linalg.LinAlgError, ValueError):
                 vifs.append(float("inf"))
     return pd.DataFrame({"feature": X.columns.tolist(), "VIF": pd.to_numeric(vifs, errors="coerce")})

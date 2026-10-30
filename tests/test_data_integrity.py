@@ -43,3 +43,14 @@ def test_report_includes_cardinality_and_duplicate_details():
     report = checker.report()
     assert "`id` (" in report  # high-cardinality column details
     assert "Preview: indices" in report  # duplicate row details
+
+
+def test_embedded_rows_by_regex_flags_delimited_cells():
+    df = pd.DataFrame({"s": ["plain", "a|b|c|d", None], "n": [1, 2, 3]})
+    result = DataIntegrityOverlay(df).check_embedded_rows_by_regex()
+    assert [(idx, col) for idx, col, _ in result["embedded_cells"]] == [(1, "s")]
+
+
+def test_run_checks_returns_results(messy_df):
+    results = DataIntegrityOverlay(messy_df.copy()).run_checks()
+    assert {"missingness", "whitespace", "constancy", "cardinality", "duplicates", "embedded_rows"} <= results.keys()

@@ -1,7 +1,7 @@
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.feature_selection import mutual_info_classif
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 import pandas as pd
 import numpy as np
@@ -10,7 +10,7 @@ from scipy.spatial.distance import pdist, cdist
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from ._common import DEFAULT_MISSING_TOKENS, MissingnessAwareOverlay
+from ._common import DEFAULT_MISSING_TOKENS, MissingnessAwareOverlay, split_numeric
 
 
 class ClassificationOverlay(MissingnessAwareOverlay):
@@ -38,11 +38,23 @@ class ClassificationOverlay(MissingnessAwareOverlay):
             }
 
         df_to_use = self.working_df
-        X = df_to_use.drop(columns=[self.target])
+        X, excluded = split_numeric(df_to_use.drop(columns=[self.target]))
         y = df_to_use[self.target]
 
+        if X.shape[1] < 2:
+            return {
+                "method": method,
+                "separable": None,
+                "overlap_score": None,
+                "notes": f"Fewer than two numeric features ({X.shape[1]}) — separability check skipped.",
+                "data_used": self.data_used,
+                "recommendation": None
+            }
+
+        # Standardise so the projection is not dominated by the largest-scale feature
+        X_scaled = StandardScaler().fit_transform(X)
         reducer = TSNE(n_components=2, perplexity=perplexity, random_state=random_state) if method == "tsne" else PCA(n_components=2)
-        X_proj = reducer.fit_transform(X)
+        X_proj = reducer.fit_transform(X_scaled)
 
         df_proj = pd.DataFrame(X_proj, columns=["dim1", "dim2"])
         df_proj["label"] = y.to_numpy()  # positional: y keeps the gaps left by dropna()
@@ -75,7 +87,7 @@ class ClassificationOverlay(MissingnessAwareOverlay):
             else "Consider tree-based or kernel methods due to class overlap."
         )
 
-        return {
+        result = {
             "method": method,
             "overlap_score": round(overlap_score, 3),
             "separable": separable,
@@ -84,6 +96,9 @@ class ClassificationOverlay(MissingnessAwareOverlay):
             "data_used": self.data_used,
             "recommendation": recommendation
         }
+        if excluded:
+            result["excluded_columns"] = excluded
+        return result
 
     def _generate_spatial_description(self, method, centroids, spreads, mean_centroid_dist, mean_spread, separable):
         """Generate descriptive text about spatial relationships between class centroids."""

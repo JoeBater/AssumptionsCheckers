@@ -108,3 +108,27 @@ def test_skipped_separability_reports_complete_fraction(classification_df):
     result = ClassificationOverlay(df, "t", suppress_missing_warnings=True).check_separability()
     assert result["separable"] is None
     assert "Only 40.0% of rows are complete" in result["notes"]
+
+
+def test_vif_uses_an_intercept(rng):
+    from overlays.SharedOverlay import SharedOverlay
+    df = pd.DataFrame({"a": rng.normal(100, 1, 300), "b": rng.normal(50, 1, 300), "t": rng.integers(0, 2, 300)})
+    result = SharedOverlay(df, "t").check_multicollinearity()
+    assert result["has_multicollinearity"] is False
+    assert all(r["VIF"] < 2 for r in result["details"])
+
+
+def test_separability_is_scale_invariant(classification_df):
+    rescaled = classification_df.copy()
+    rescaled["q"] *= 1000
+    original = ClassificationOverlay(classification_df.copy(), "t").check_separability()
+    scaled = ClassificationOverlay(rescaled, "t").check_separability()
+    assert scaled["overlap_score"] == pytest.approx(original["overlap_score"])
+
+
+def test_separability_excludes_non_numeric_columns(classification_df, rng):
+    df = classification_df.copy()
+    df["colour"] = rng.choice(["red", "blue"], len(df))
+    result = ClassificationOverlay(df, "t").check_separability()
+    assert result["separable"] is not None
+    assert result["excluded_columns"] == ["colour"]
