@@ -26,7 +26,7 @@ class ClassificationOverlay:
         self.target = target
         self.visualize = visualize # not used currently
         self.report = {}
-        self.pc_missing = 0.0
+        self.row_missing_frac = 0.0
         self.missingness_threshold = missingness_threshold
 
         # Replace common string missing tokens with np.nan
@@ -35,9 +35,9 @@ class ClassificationOverlay:
         self.df.replace(to_replace=missing_values, value=np.nan, inplace=True)
         self.df_no_missing = self.df.dropna()
         if self.df.isnull().any().any():
-            self.pc_missing = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
+            self.row_missing_frac = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
             self.report["missing_data"] =  (
-                f"Warning: Data contains missing values ({self.pc_missing* 100:.2f}%). "
+                f"Warning: {self.row_missing_frac:.1%} of rows contain missing values. "
                 + "\nTests will run on unmissing subset. Results may not generalize. "
                 + "\nConsider imputation or removing rows/columns with excessive missingness."
             )
@@ -51,22 +51,22 @@ class ClassificationOverlay:
         Projects features into 2D and checks class separability visually and via overlap metrics.
         Returns spatial relationships analysis instead of raw projection data.
         """
-        if self.pc_missing > self.missingness_threshold:
+        if self.row_missing_frac > self.missingness_threshold:
             self.report["missing_data"] = (
-                f"Error: Over {self.pc_missing:.2f}% of data is missing. "
+                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
                 "\nSeparability test cannot proceed."
             )
             return {
                 "method": method,
-                "separable": False,
+                "separable": None,
                 "overlap_score": None,
-                "notes": f"Only {self.pc_missing:.1%} of data is complete — separability check skipped.",
+                "notes": f"Only {1.0 - self.row_missing_frac:.1%} of rows are complete — separability check skipped.",
                 "data_used": None,
                 "recommendation": "Consider imputation or model-aware handling before assessing separability."
             }
 
         # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
+        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
         X = df_to_use.drop(columns=[self.target])
         y = df_to_use[self.target]
 
@@ -110,7 +110,7 @@ class ClassificationOverlay:
             "separable": separable,
             "spatial_description": relationship_desc,
             "class_summary": class_summary,
-            "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
+            "data_used": "Unmissing subset" if self.row_missing_frac > 0 else "Full dataset",
             "recommendation": recommendation
         }
 
@@ -188,21 +188,21 @@ class ClassificationOverlay:
         """
         Checks for redundant features via correlation and mutual information clustering.
         """
-        if self.pc_missing > self.missingness_threshold:
+        if self.row_missing_frac > self.missingness_threshold:
             self.report["missing_data"] = (
-                f"Error: Over {self.pc_missing:.2f}% of data is missing. "
-                "\nSeparability test cannot proceed."
+                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
+                "\nRedundancy check cannot proceed."
             )
             return {
                 "redundant_pairs": None,
                 "mutual_info_scores": None,
-                "notes": f"Only {1.0 - self.pc_missing:.1%} of data is complete — redundancy check skipped.",
-                "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
+                "notes": f"Only {1.0 - self.row_missing_frac:.1%} of rows are complete — redundancy check skipped.",
+                "data_used": "Unmissing subset" if self.row_missing_frac > 0 else "Full dataset",
                 "recommendation": "Consider imputation or column pruning before assessing redundancy."
             }
 
         # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
+        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
         X = df_to_use.drop(columns=[self.target])
         y = df_to_use[self.target]
 
@@ -242,6 +242,6 @@ class ClassificationOverlay:
             "redundant_pairs": redundant_pairs,
             "mutual_info_scores": mi_scores,
             "notes": notes,
-            "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset",
+            "data_used": "Unmissing subset" if self.row_missing_frac > 0 else "Full dataset",
             "recommendation": recommendation
         }

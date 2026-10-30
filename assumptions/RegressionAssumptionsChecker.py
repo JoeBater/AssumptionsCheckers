@@ -8,6 +8,7 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 
 from overlays.SharedOverlay import SharedOverlay
 from overlays.RegressionOverlay import RegressionOverlay
+from assumptions._common import NO_ALGORITHM_NOTE, verdict, print_check_result
 
 class RegressionAssumptionsChecker:
     def __init__(self, df, target, algorithm=None, visualize=False, missingness_threshold=0.5):
@@ -96,6 +97,7 @@ class RegressionAssumptionsChecker:
         self.results = {}
 
         if self.algorithm is None:
+            print(NO_ALGORITHM_NOTE)
             self.recommend_models()
 
         elif self.algorithm in ["LinearRegression", "Ridge", "Lasso", "ElasticNet"]:
@@ -106,18 +108,30 @@ class RegressionAssumptionsChecker:
             self.results["normality"] = self.regression_overlay.check_residual_normality()
             #self.results["outliers"] = self.regression_overlay.check_outliers_influential_points()
 
-            # Evaluate hard constraints
-            if not self.results["homoscedasticity"]["homoscedasticity"]:
-                self.results["status"] = "unsuitable"
+            # Heteroscedasticity leaves coefficients unbiased but invalidates standard errors
+            is_homoscedastic = verdict(self.results["homoscedasticity"], "homoscedasticity")
+            if is_homoscedastic is False:
+                self.results["status"] = "conditionally_permissible"
                 self.results["reason"] = (
-                    f"{self.algorithm} is not suitable because residuals are heteroscedastic. "
-                    "Consider robust alternatives such as HuberRegressor or RANSACRegressor."
+                    f"Residuals are heteroscedastic: {self.algorithm} coefficient estimates remain unbiased, "
+                    "but standard errors and p-values are unreliable. Consider heteroscedasticity-robust "
+                    "standard errors (e.g. HC3), transforming the target (e.g. log), or weighted least squares."
+                )
+            elif is_homoscedastic is None:
+                self.results["status"] = "unknown"
+                self.results["reason"] = (
+                    "Homoscedasticity check was skipped (see the data quality summary), "
+                    "so suitability could not be assessed."
                 )
             else:
                 self.results["status"] = "suitable"
 
-            self.results["scaling"]["required_for_model"] = True
-            self.results["scaling"]["notes"] += " Scaling is required for this algorithm."
+            if self.algorithm == "LinearRegression":
+                self.results["scaling"]["required_for_model"] = False
+                self.results["scaling"]["notes"] += " Scaling is optional for ordinary least squares: predictions are unaffected by rescaling."
+            else:
+                self.results["scaling"]["required_for_model"] = True
+                self.results["scaling"]["notes"] += " Scaling is required for this algorithm: its penalty is scale-sensitive."
 
         elif self.algorithm in ["SVR", "KNeighborsRegressor"]:
             scaling_check = self.overlay.check_scaling()
@@ -165,25 +179,13 @@ class RegressionAssumptionsChecker:
         self.results["normality"] = self.regression_overlay.check_residual_normality()
         self.results["tree_suitability"] = self.overlay.check_tree_suitability()
         
-        # Extract check results
-        linearity = self.results.get("linearity", {})
-        is_linear = linearity.get("linearity", False) if isinstance(linearity, dict) else linearity
-        
-        multicollinearity = self.results.get("multicollinearity", {})
-        has_multicollinearity = not multicollinearity.get("multicollinearity", True) if isinstance(multicollinearity, dict) else False
-        
-        homoscedasticity = self.results.get("homoscedasticity", {})
-        is_homoscedastic = homoscedasticity.get("homoscedasticity", False) if isinstance(homoscedasticity, dict) else False
-        
-        scaling = self.results.get("scaling", {})
-        scaling_needed = scaling.get("scaling_needed", False) if isinstance(scaling, dict) else False
-        
-        normality = self.results.get("normality", {})
-        is_normal = normality.get("normality", False) if isinstance(normality, dict) else False
-        
-        tree_suitability = self.results.get("tree_suitability", {})
-        trees_suitable = tree_suitability.get("tree_suitability", False) if isinstance(tree_suitability, dict) else False
-        
+        # Extract check verdicts: True/False, or None when a check was skipped
+        is_linear = verdict(self.results.get("linearity"), "linearity")
+        has_multicollinearity = verdict(self.results.get("multicollinearity"), "has_multicollinearity")
+        is_homoscedastic = verdict(self.results.get("homoscedasticity"), "homoscedasticity")
+        scaling_needed = verdict(self.results.get("scaling"), "scaling_needed")
+        trees_suitable = verdict(self.results.get("tree_suitability"), "tree_suitability")
+
         recommendations = []
         
         # RandomForestRegressor - robust ensemble
@@ -210,16 +212,26 @@ class RegressionAssumptionsChecker:
             "notes": gb_notes
         })
         
-        # LinearRegression - best case scenario
-        lr_suitability = "high" if (is_linear and is_homoscedastic and not has_multicollinearity) else "low"
-        lr_notes = ["Requires scaling" if scaling_needed else "Scaling optional"]
+        # LinearRegression - best case scenario; skipped checks count as unknown, not violated
+        lr_checks = {"Linearity": is_linear, "Homoscedasticity": is_homoscedastic,
+                     "Multicollinearity": None if has_multicollinearity is None else not has_multicollinearity}
+        lr_all_hold = all(ok is True for ok in lr_checks.values())
+        lr_violated = any(ok is False for ok in lr_checks.values())
+        lr_suitability = "high" if lr_all_hold else "low" if lr_violated else "medium"
+        lr_notes = ["No scaling required (OLS predictions are unaffected by rescaling)"]
         if has_multicollinearity:
             lr_notes.append("High multicollinearity detected - model will be unstable")
-        if not is_homoscedastic:
+        if is_homoscedastic is False:
             lr_notes.append("Heteroscedasticity detected")
-        if not is_linear:
+        if is_linear is False:
             lr_notes.append("Nonlinearity detected")
-        lr_reason = "Ideal when linearity and homoscedasticity assumptions hold." if (is_linear and is_homoscedastic) else "Assumptions violated; consider regularized or nonlinear alternatives."
+        lr_notes.extend(f"{name} check skipped" for name, ok in lr_checks.items() if ok is None)
+        if lr_all_hold:
+            lr_reason = "Ideal when linearity and homoscedasticity assumptions hold."
+        elif lr_violated:
+            lr_reason = "Assumptions violated; consider regularized or nonlinear alternatives."
+        else:
+            lr_reason = "Some assumption checks were skipped; suitability could not be fully assessed."
         recommendations.append({
             "algorithm": "LinearRegression",
             "suitability": lr_suitability,
@@ -230,8 +242,6 @@ class RegressionAssumptionsChecker:
         # Ridge - handles multicollinearity
         ridge_suitability = "high" if has_multicollinearity else "medium"
         ridge_notes = ["Requires scaling", "Handles multicollinearity via L2 regularization"]
-        if not is_homoscedastic:
-            ridge_notes.append("More robust to heteroscedasticity than OLS")
         ridge_reason = "Ridge regression controls multicollinearity through regularization." if has_multicollinearity else "Regularized linear model with good bias-variance tradeoff."
         recommendations.append({
             "algorithm": "Ridge",
@@ -241,7 +251,7 @@ class RegressionAssumptionsChecker:
         })
         
         # Lasso - feature selection
-        lasso_suitability = "medium" if has_multicollinearity else "medium"
+        lasso_suitability = "medium"
         lasso_notes = ["Requires scaling", "Performs feature selection via L1 regularization"]
         if has_multicollinearity:
             lasso_notes.append("Can select among correlated features")
@@ -264,11 +274,11 @@ class RegressionAssumptionsChecker:
         })
         
         # SVR - needs scaling
-        svr_suitability = "medium" if scaling_needed else "high"
-        svr_notes = ["Requires StandardScaler or RBF scaler", "Effective for nonlinear patterns"]
-        if not is_linear:
+        svr_suitability = "high" if scaling_needed is False else "medium"
+        svr_notes = ["Requires feature scaling (e.g. StandardScaler)", "Effective for nonlinear patterns"]
+        if is_linear is False:
             svr_notes.append("RBF kernel handles nonlinearity well")
-        svr_reason = "Kernel methods handle nonlinearity effectively with proper scaling." if scaling_needed else "Strong choice for nonlinear regression."
+        svr_reason = "Strong choice for nonlinear regression." if scaling_needed is False else "Kernel methods handle nonlinearity effectively with proper scaling."
         recommendations.append({
             "algorithm": "SVR",
             "suitability": svr_suitability,
@@ -344,11 +354,7 @@ class RegressionAssumptionsChecker:
             print("-" * 30)
 
             if isinstance(result, dict):
-                for subkey, value in result.items():
-                    # Skip redundant missingness messages from individual checks
-                    if subkey in ["notes", "recommendation"] and "missing" in str(value).lower():
-                        continue
-                    print(f"{subkey}: {value}")
+                print_check_result(result)
             else:
                 print(result)
 
