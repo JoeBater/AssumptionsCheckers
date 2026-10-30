@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assumptions-checkers"
+version = "0.1.0"
+description = "Check machine-learning model assumptions and data integrity before modelling."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Joe Bater" }]
+requires-python = ">=3.9"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "statsmodels",
+]
+
+[project.optional-dependencies]
+dev = ["jupyter", "nbstripout", "openpyxl", "pytest"]
+
+[project.urls]
+Repository = "https://github.com/JoeBater/AssumptionsCheckers"
+
+[tool.setuptools]
+packages = ["assumptions", "overlays"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
