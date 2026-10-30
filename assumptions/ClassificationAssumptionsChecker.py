@@ -9,17 +9,34 @@ import numpy as np
 
 from overlays.SharedOverlay import SharedOverlay
 from overlays.ClassificationOverlay import ClassificationOverlay
+from assumptions._common import NO_ALGORITHM_NOTE, verdict, print_check_result
+
+LINEAR_MODELS = ["LogisticRegression"]
+SCALE_SENSITIVE_MODELS = ["SVC", "KNeighborsClassifier"]
+TREE_MODELS = ["DecisionTreeClassifier", "RandomForestClassifier", "GradientBoostingClassifier"]
+
+CLASS_WEIGHT_ADVICE = "Use class_weight='balanced' to compensate for class imbalance."
+IMBALANCE_ADVICE = {
+    "LogisticRegression": CLASS_WEIGHT_ADVICE,
+    "SVC": CLASS_WEIGHT_ADVICE,
+    "DecisionTreeClassifier": CLASS_WEIGHT_ADVICE,
+    "RandomForestClassifier": CLASS_WEIGHT_ADVICE,
+    "GradientBoostingClassifier": "Pass sample_weight=compute_sample_weight('balanced', y) to fit() to compensate for class imbalance.",
+    "KNeighborsClassifier": "KNN has no class weighting; consider resampling (e.g. SMOTE or undersampling) for class imbalance.",
+}
 
 class ClassificationAssumptionsChecker:
     def __init__(self, df, target, algorithm=None, visualize=False):
-        self.df = df
+        # Overlays normalise missing-value tokens in place, so never touch the caller's frame
+        self.df = df.copy()
         self.target = target
         self.algorithm = algorithm
-        
+
         # Suppress individual overlay missingness warnings by setting to False temporarily
-        # We'll generate a consolidated missingness report instead
-        self.overlay = SharedOverlay(df, target, visualize, suppress_missing_warnings=True)
-        self.classification_overlay = ClassificationOverlay(df, target, visualize, suppress_missing_warnings=True)
+        # We'll generate a consolidated missingness report instead.
+        # ClassificationOverlay normalises missing tokens, so build it before SharedOverlay.
+        self.classification_overlay = ClassificationOverlay(self.df, target, visualize, suppress_missing_warnings=True)
+        self.overlay = SharedOverlay(self.df, target, visualize, suppress_missing_warnings=True)
         self.report = {}
         
         # Generate consolidated missingness analysis
@@ -87,15 +104,90 @@ class ClassificationAssumptionsChecker:
             return "Very high missingness: Consider data collection improvement, advanced imputation, or models specifically designed for sparse data."
 
     def check_assumptions(self):
-        self.assumption_results = {
-            "multicollinearity": self.overlay.check_multicollinearity(),
-            "class_imbalance": self.overlay.check_class_imbalance(),
-            "scaling_issues": self.overlay.check_scaling(),
-            "redundancy": self.classification_overlay.check_redundancy(),
-            "separability": self.classification_overlay.check_separability(),
-        }
-        self.recommend_models()
-        return self.assumption_results
+        """Run relevant checks depending on algorithm."""
+        results = self.assumption_results = {}
+
+        if self.algorithm is None:
+            print(NO_ALGORITHM_NOTE)
+            results["multicollinearity"] = self.overlay.check_multicollinearity()
+            results["class_imbalance"] = self.overlay.check_class_imbalance()
+            results["scaling_issues"] = self.overlay.check_scaling()
+            results["redundancy"] = self.classification_overlay.check_redundancy()
+            results["separability"] = self.classification_overlay.check_separability()
+            self.recommend_models()
+            return results
+
+        if self.algorithm in LINEAR_MODELS:
+            results["multicollinearity"] = self.overlay.check_multicollinearity()
+            results["class_imbalance"] = self.overlay.check_class_imbalance()
+            results["scaling_issues"] = self.overlay.check_scaling()
+            results["redundancy"] = self.classification_overlay.check_redundancy()
+            results["separability"] = self.classification_overlay.check_separability()
+
+            has_multicollinearity = verdict(results["multicollinearity"], "has_multicollinearity")
+            if has_multicollinearity:
+                results["status"] = "conditionally_permissible"
+                results["reason"] = (
+                    "Multicollinearity detected: keep regularization on (the default L2 penalty) "
+                    "and interpret coefficients with care, or drop/combine correlated features."
+                )
+            elif has_multicollinearity is None:
+                results["status"] = "unknown"
+                results["reason"] = "Multicollinearity check was skipped, so suitability could not be fully assessed."
+            else:
+                results["status"] = "suitable"
+                results["reason"] = "No multicollinearity detected."
+            if verdict(results["separability"], "separable") is False:
+                results["reason"] += " Classes overlap in a 2D projection; a linear decision boundary may underfit."
+
+            results["scaling_issues"]["required_for_model"] = True
+            results["scaling_issues"]["notes"] += " Scaling is required for this algorithm: its penalty is scale-sensitive."
+
+        elif self.algorithm in SCALE_SENSITIVE_MODELS:
+            results["class_imbalance"] = self.overlay.check_class_imbalance()
+            results["scaling_issues"] = self.overlay.check_scaling()
+            if self.algorithm == "SVC":
+                results["separability"] = self.classification_overlay.check_separability()
+
+            results["status"] = "conditionally_permissible"
+            results["reason"] = f"{self.algorithm} is suitable once features are scaled."
+            results["scaling_issues"]["required_for_model"] = True
+            results["scaling_issues"]["notes"] += " Scaling is required for this algorithm."
+
+        elif self.algorithm in TREE_MODELS:
+            results["tree_suitability"] = self.overlay.check_tree_suitability()
+            results["class_imbalance"] = self.overlay.check_class_imbalance()
+            results["scaling_issues"] = self.overlay.check_scaling()
+
+            if not results["tree_suitability"]["tree_suitability"]:
+                results["status"] = "conditionally_unsuitable"
+                results["reason"] = results["tree_suitability"]["notes"]
+            else:
+                results["status"] = "suitable"
+                results["reason"] = "Tree-based models do not assume linearity, scaling or uncorrelated features."
+            results["scaling_issues"]["required_for_model"] = False
+            results["scaling_issues"]["notes"] += " Scaling is optional for this algorithm."
+
+        else:
+            results["status"] = "unknown"
+            results["reason"] = f"Algorithm {self.algorithm} not recognized."
+            self.help_algorithms()
+
+        if verdict(results.get("class_imbalance"), "is_imbalanced"):
+            results["reason"] += " " + IMBALANCE_ADVICE[self.algorithm]
+
+        self.report["assumptions"] = results
+        return results
+
+    def help_algorithms(self):
+        print('ClassificationAssumptionsChecker')
+        print('Checks multicollinearity, class imbalance, scaling, redundancy and separability for:')
+        print(', '.join(LINEAR_MODELS))
+        print('Checks scaling and class imbalance (plus separability for SVC) for:')
+        print(', '.join(SCALE_SENSITIVE_MODELS))
+        print('Checks tree-suitability and class imbalance for:')
+        print(', '.join(TREE_MODELS))
+        print("Use 'None' to run all checks and make recommendations")
 
     def recommend_models(self):
         """
@@ -104,19 +196,12 @@ class ClassificationAssumptionsChecker:
         """
         results = self.assumption_results
         
-        # Extract check results
-        multicollinearity = results.get("multicollinearity", {})
-        has_multicollinearity = multicollinearity.get("multicollinearity", False) if isinstance(multicollinearity, dict) else multicollinearity
-        
-        class_imbalance = results.get("class_imbalance", {})
-        is_imbalanced = class_imbalance.get("is_imbalanced", False) if isinstance(class_imbalance, dict) else class_imbalance
-        
-        scaling = results.get("scaling_issues", {})
-        scaling_needed = scaling.get("scaling_needed", False) if isinstance(scaling, dict) else scaling
-        
-        separability = results.get("separability", {})
-        is_separable = separability.get("separable", True) if isinstance(separability, dict) else separability
-        
+        # Extract check verdicts: True/False, or None when a check was skipped
+        has_multicollinearity = verdict(results.get("multicollinearity"), "has_multicollinearity")
+        is_imbalanced = verdict(results.get("class_imbalance"), "is_imbalanced")
+        scaling_needed = verdict(results.get("scaling_issues"), "scaling_needed")
+        is_separable = verdict(results.get("separability"), "separable")
+
         recommendations = []
         
         # RandomForestClassifier - generally robust
@@ -135,7 +220,7 @@ class ClassificationAssumptionsChecker:
         # GradientBoostingClassifier - also robust
         gb_notes = ["No scaling required", "Strong predictive power"]
         if is_imbalanced:
-            gb_notes.append("Use scale_pos_weight for imbalance")
+            gb_notes.append("Use sample_weight (e.g. compute_sample_weight('balanced', y)) for imbalance")
         recommendations.append({
             "algorithm": "GradientBoostingClassifier",
             "suitability": "high",
@@ -148,9 +233,14 @@ class ClassificationAssumptionsChecker:
         svc_notes = ["Requires StandardScaler or MinMaxScaler"]
         if is_imbalanced:
             svc_notes.append("Use class_weight parameter for imbalance")
-        if not is_separable:
+        if is_separable is False:
             svc_notes.append("Kernel choice critical for overlapping classes")
-        svc_reason = "Effective for well-separated classes with proper scaling." if is_separable else "Can handle overlap with appropriate kernel."
+        if is_separable is None:
+            svc_reason = "Separability could not be assessed; effective with proper scaling and kernel choice."
+        elif is_separable:
+            svc_reason = "Effective for well-separated classes with proper scaling."
+        else:
+            svc_reason = "Can handle overlap with appropriate kernel."
         recommendations.append({
             "algorithm": "SVC",
             "suitability": svc_suitability,
@@ -159,11 +249,11 @@ class ClassificationAssumptionsChecker:
         })
         
         # KNeighborsClassifier - needs scaling
-        knn_suitability = "medium" if scaling_needed else "high"
+        knn_suitability = "high" if scaling_needed is False else "medium"
         knn_notes = ["Requires feature scaling"]
         if is_imbalanced:
-            knn_notes.append("Consider weighted neighbors for imbalance")
-        knn_reason = "Distance-based method; sensitive to feature scaling." if scaling_needed else "Effective distance-based approach."
+            knn_notes.append("No class weighting available; consider resampling for imbalance")
+        knn_reason = "Effective distance-based approach." if scaling_needed is False else "Distance-based method; sensitive to feature scaling."
         recommendations.append({
             "algorithm": "KNeighborsClassifier",
             "suitability": knn_suitability,
@@ -178,6 +268,8 @@ class ClassificationAssumptionsChecker:
             lr_notes.append("High multicollinearity detected")
             lr_notes.append("Use regularization: L2 (Ridge) or L1 (Lasso)")
             lr_notes.append("Consider dropping or combining correlated features")
+        elif has_multicollinearity is None:
+            lr_notes.append("Multicollinearity check skipped")
         if is_imbalanced:
             lr_notes.append("Use class_weight parameter")
         lr_reason = "Linear model struggles with multicollinearity without regularization." if has_multicollinearity else "Baseline linear classifier."
@@ -229,11 +321,7 @@ class ClassificationAssumptionsChecker:
             print("-" * 30)
 
             if isinstance(result, dict):
-                for subkey, value in result.items():
-                    # Skip redundant missingness messages from individual checks
-                    if subkey in ["notes", "recommendation"] and "missing" in str(value).lower():
-                        continue
-                    print(f"{subkey}: {value}")
+                print_check_result(result)
             else:
                 print(result)
 

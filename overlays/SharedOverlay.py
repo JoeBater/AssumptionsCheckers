@@ -27,15 +27,16 @@ class SharedOverlay:
         self.target = target
         self.visualize = visualize
         self.missingness_threshold = missingness_threshold  # proportion
-        self.pc_missing = self.df.isnull().mean().mean()  # proportion
+        self.cell_missing_frac = self.df.isnull().mean().mean()  # proportion of cells
+        self.row_missing_frac = 0.0  # proportion of rows with any missing value
         self.report = {}
 
         # Check for missing data
         self.df_no_missing = self.df.dropna()
         if self.df.isnull().any().any():
-            self.pc_missing = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
+            self.row_missing_frac = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
             self.report["missing_data"] =  (
-                f"Warning: Data contains missing values ({self.pc_missing* 100:.2f}%). "
+                f"Warning: {self.row_missing_frac:.1%} of rows contain missing values. "
                 + "\nTests will run on unmissing subset. Results may not generalize. "
                 + "\nConsider imputation or removing rows/columns with excessive missingness."
             )
@@ -56,7 +57,7 @@ class SharedOverlay:
 
         if X.isna().any().any():
             return {
-                "multicollinearity": True,
+                "has_multicollinearity": None,
                 "details": None,
                 "notes": "Missing data — multicollinearity check skipped.",
                 "recommendation": "Missing values detected, downstream classifiers like XGBoost or CatBoost may tolerate missingness natively. Consider whether imputation is necessary based on your modeling choice."
@@ -65,7 +66,7 @@ class SharedOverlay:
         non_numeric = [col for col in X.columns if not np.issubdtype(X[col].dtype, np.number)]
         if non_numeric:
             return {
-                "multicollinearity": True,
+                "has_multicollinearity": None,
                 "details": None,
                 "notes": f"Non-numeric columns present — multicollinearity check skipped: {non_numeric}",
                 "recommendation": "Recast or exclude non-numeric columns before running VIF."
@@ -80,6 +81,7 @@ class SharedOverlay:
         flagged = inf_counts[inf_counts > 0]
         if not flagged.empty:
             return {
+                "has_multicollinearity": None,
                 "has_infinite": True,
                 "columns": flagged.index.tolist(),
                 "total": int(flagged.sum()),
@@ -90,7 +92,7 @@ class SharedOverlay:
 
         if X.shape[1] < 2:
             return {
-                "multicollinearity": True,
+                "has_multicollinearity": False,
                 "details": None,
                 "notes": "Only one predictor — multicollinearity check not applicable.",
                 "recommendation": None
@@ -140,7 +142,7 @@ class SharedOverlay:
 
         if X_temp.shape[1] == 0:
             return {
-                "multicollinearity": False,
+                "has_multicollinearity": True,
                 "details": [],
                 "notes": "All predictors dropped due to perfect multicollinearity.",
                 "recommendation": "Rebuild feature set to avoid linear dependence.",
@@ -152,7 +154,7 @@ class SharedOverlay:
             f"Consider removing these features: {drop_set}" if drop_set else None
         )
         return {
-            "multicollinearity": len(drop_set) == 0,
+            "has_multicollinearity": len(drop_set) > 0,
             "details": vif_data.to_dict(orient="records"),
             "notes": (
                 "Perfect or high multicollinearity detected" if drop_set 

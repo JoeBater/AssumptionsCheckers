@@ -20,12 +20,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class RegressionOverlay:
-    def __init__(self, df, target, visualize=False, custom_missing_values=None, missingness_threshold=0.5):
+    def __init__(self, df, target, visualize=False, custom_missing_values=None, missingness_threshold=0.5, suppress_missing_warnings=False):
         self.df = df
         self.target = target
         self.visualize = visualize # not used currently
         self.report = {}
-        self.pc_missing = 0.0
+        self.row_missing_frac = 0.0
         self.missingness_threshold = missingness_threshold
 
         # Check for missing data
@@ -34,21 +34,33 @@ class RegressionOverlay:
         self.df.replace(to_replace=missing_values, value=np.nan, inplace=True)
         self.df_no_missing = self.df.dropna()
         if self.df.isnull().any().any():
-            self.pc_missing = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
+            self.row_missing_frac = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
             self.report["missing_data"] =  (
-                f"Warning: Data contains missing values ({self.pc_missing* 100:.2f}%). "
+                f"Warning: {self.row_missing_frac:.1%} of rows contain missing values. "
                 + "\nTests will run on unmissing subset. Results may not generalize. "
                 + "\nConsider imputation or removing rows/columns with excessive missingness."
             )
-            print(self.report["missing_data"])
+            # Only print if not suppressed (for when we handle missingness centrally)
+            if not suppress_missing_warnings:
+                print(self.report["missing_data"])
+
+    def _numeric_design(self, df_to_use):
+        """Split into numeric predictors and target; OLS cannot take non-numeric columns."""
+        X = df_to_use.drop(columns=[self.target])
+        excluded = [col for col in X.columns if not pd.api.types.is_numeric_dtype(X[col]) or pd.api.types.is_bool_dtype(X[col])]
+        return X.drop(columns=excluded), df_to_use[self.target], excluded
+
+    @staticmethod
+    def _excluded_note(excluded):
+        return f" Non-numeric columns excluded: {excluded}." if excluded else ""
 
     # =======================================
     # Individual checks
     # =======================================
     def check_linearity(self):
-        if self.pc_missing > self.missingness_threshold:
+        if self.row_missing_frac > self.missingness_threshold:
             self.report["missing_data"] = (
-                f"Error: Over {self.pc_missing:.2f}% of data is missing. "
+                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
                 "\nLinearity test cannot proceed."
             )
             return {
@@ -58,9 +70,8 @@ class RegressionOverlay:
             }
 
         # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
-        y = df_to_use[self.target]
+        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
+        X, y, excluded = self._numeric_design(df_to_use)
 
         X_const = sm.add_constant(X)
         model = sm.OLS(y, X_const).fit()
@@ -72,14 +83,14 @@ class RegressionOverlay:
             "notes": (
                 "Linearity assumption holds." if reset_test.pvalue >= 0.05
                 else "Non-linearity detected."
-            )
+            ) + self._excluded_note(excluded)
         }
 
 
     def check_residual_normality(self):
-        if self.pc_missing > self.missingness_threshold:
+        if self.row_missing_frac > self.missingness_threshold:
             self.report["missing_data"] = (
-                f"Error: Over {self.pc_missing:.2f}% of data is missing. "
+                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
                 "Residual normality test cannot proceed."
             )
             return {
@@ -89,9 +100,8 @@ class RegressionOverlay:
                 "data_used": "None"
             }
 
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
-        y = df_to_use[self.target]
+        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
+        X, y, excluded = self._numeric_design(df_to_use)
 
         X_const = sm.add_constant(X)
         model = sm.OLS(y, X_const).fit()
@@ -103,8 +113,8 @@ class RegressionOverlay:
             "notes": (
                 "Residuals appear normal." if p_value >= 0.05
                 else "Residuals deviate from normality."
-            ),
-            "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset"
+            ) + self._excluded_note(excluded),
+            "data_used": "Unmissing subset" if self.row_missing_frac > 0 else "Full dataset"
         }
 
     def check_multicollinearity(self, threshold=10):
@@ -113,13 +123,13 @@ class RegressionOverlay:
         Returns diagnostics and minimal drop set recommendation.
         """
 
-        if self.pc_missing > self.missingness_threshold:
+        if self.row_missing_frac > self.missingness_threshold:
             self.report["missing_data"] = (
-                f"Error: {self.pc_missing:.2f}% of data is missing, which is over the {self.missingness_threshold}% threshold. "
+                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
                 "Multicollinearity check cannot proceed."
             )
             return {
-                "multicollinearity": None,
+                "has_multicollinearity": None,
                 "details": None,
                 "notes": "Multicollinearity check not performed due to excessive missing data.",
                 "recommendation": None,
@@ -128,7 +138,7 @@ class RegressionOverlay:
 
 
         # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
+        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
         X = df_to_use.drop(columns=[self.target])
 
         original_columns = X.columns.tolist()
@@ -142,7 +152,7 @@ class RegressionOverlay:
 
         if X.shape[1] < 2:
             return {
-                "multicollinearity": True,
+                "has_multicollinearity": False,
                 "details": None,
                 "notes": f"Not enough predictors ({X.shape[1]}) — multicollinearity check not applicable.",
                 "recommendation": None
@@ -187,7 +197,7 @@ class RegressionOverlay:
 
         if X_temp.shape[1] == 0:
             return {
-                "multicollinearity": False,
+                "has_multicollinearity": True,
                 "details": [],
                 "notes": "All predictors dropped due to perfect multicollinearity.",
                 "recommendation": "Rebuild feature set to avoid linear dependence.",
@@ -208,7 +218,7 @@ class RegressionOverlay:
                 )
 
         return {
-            "multicollinearity": len(drop_set) == 0,
+            "has_multicollinearity": len(drop_set) > 0,
             "details": vif_data.to_dict(orient="records"),
             "notes": (
                 "Perfect or high multicollinearity detected" if drop_set 
@@ -225,9 +235,9 @@ class RegressionOverlay:
     def check_heteroscedasticity(self):
         """Check heteroscedasticity using Breusch-Pagan test."""
 
-        if self.pc_missing > self.missingness_threshold:
+        if self.row_missing_frac > self.missingness_threshold:
             self.report["missing_data"] = (
-                f"Error: Over {self.pc_missing*100:.2f}% of data is missing. "
+                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
                 "\nHeteroscedasticity test cannot proceed."
             )
             return {
@@ -237,9 +247,8 @@ class RegressionOverlay:
             }
         
         # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
-        y = df_to_use[self.target]
+        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
+        X, y, excluded = self._numeric_design(df_to_use)
 
         X_const = sm.add_constant(X)
         model = sm.OLS(y, X_const).fit()
@@ -249,8 +258,8 @@ class RegressionOverlay:
             "homoscedasticity": lm_pvalue >= 0.05,
             "p_value": lm_pvalue,
             "notes": (
-                "Residuals are homoscedastic." if lm_pvalue > 0.05 else "Residuals are heteroscedastic."
-            )
+                "Residuals are homoscedastic." if lm_pvalue >= 0.05 else "Residuals are heteroscedastic."
+            ) + self._excluded_note(excluded)
         }
 
     def check_tree_suitability(self):
@@ -322,9 +331,9 @@ class RegressionOverlay:
         - dict with method used, overlap score, and notes
         """
 
-        if self.pc_missing > self.missingness_threshold:
+        if self.row_missing_frac > self.missingness_threshold:
             self.report["missing_data"] = (
-                f"Error: Over {self.pc_missing*100:.2f}% of data is missing. "
+                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
                 "\nSeperability test cannot proceed."
             )
             return {
@@ -334,7 +343,7 @@ class RegressionOverlay:
             }
         
         # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
+        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
         X = df_to_use.drop(columns=[self.target])
         y = df_to_use[self.target]
 
