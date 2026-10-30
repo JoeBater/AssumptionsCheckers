@@ -12,14 +12,16 @@ from overlays.ClassificationOverlay import ClassificationOverlay
 
 class ClassificationAssumptionsChecker:
     def __init__(self, df, target, algorithm=None, visualize=False):
-        self.df = df
+        # Overlays normalise missing-value tokens in place, so never touch the caller's frame
+        self.df = df.copy()
         self.target = target
         self.algorithm = algorithm
-        
+
         # Suppress individual overlay missingness warnings by setting to False temporarily
-        # We'll generate a consolidated missingness report instead
-        self.overlay = SharedOverlay(df, target, visualize, suppress_missing_warnings=True)
-        self.classification_overlay = ClassificationOverlay(df, target, visualize, suppress_missing_warnings=True)
+        # We'll generate a consolidated missingness report instead.
+        # ClassificationOverlay normalises missing tokens, so build it before SharedOverlay.
+        self.classification_overlay = ClassificationOverlay(self.df, target, visualize, suppress_missing_warnings=True)
+        self.overlay = SharedOverlay(self.df, target, visualize, suppress_missing_warnings=True)
         self.report = {}
         
         # Generate consolidated missingness analysis
@@ -106,7 +108,8 @@ class ClassificationAssumptionsChecker:
         
         # Extract check results
         multicollinearity = results.get("multicollinearity", {})
-        has_multicollinearity = multicollinearity.get("multicollinearity", False) if isinstance(multicollinearity, dict) else multicollinearity
+        # The overlay's "multicollinearity" key is True when there is *no* problem
+        has_multicollinearity = not multicollinearity.get("multicollinearity", True) if isinstance(multicollinearity, dict) else False
         
         class_imbalance = results.get("class_imbalance", {})
         is_imbalanced = class_imbalance.get("is_imbalanced", False) if isinstance(class_imbalance, dict) else class_imbalance

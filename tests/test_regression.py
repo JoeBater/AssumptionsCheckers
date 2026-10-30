@@ -4,7 +4,6 @@ import pytest
 from assumptions.RegressionAssumptionsChecker import RegressionAssumptionsChecker
 
 
-@pytest.mark.xfail(strict=True, reason="bug #7: OLS checks fail on non-numeric columns")
 def test_categorical_column_is_excluded_from_ols_checks(regression_df, rng):
     df = regression_df.copy()
     df["cat"] = rng.choice(["u", "v"], len(df))
@@ -14,7 +13,6 @@ def test_categorical_column_is_excluded_from_ols_checks(regression_df, rng):
     assert "cat" in results["linearity"]["notes"]
 
 
-@pytest.mark.xfail(strict=True, reason="bug #6: missing tokens replaced in caller df")
 def test_checker_does_not_modify_caller_df(regression_df):
     df = regression_df.copy()
     df["tag"] = ["NA"] + ["ok"] * (len(df) - 1)

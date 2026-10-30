@@ -14,11 +14,13 @@ class RegressionAssumptionsChecker:
         """
         Initialize the checker with data, target variable, and model parameters.
         """
-        self.df = df
+        # Overlays normalise missing-value tokens in place, so never touch the caller's frame
+        self.df = df.copy()
         self.target = target
         self.algorithm = algorithm
-        self.overlay = SharedOverlay(df, target, visualize, missingness_threshold=missingness_threshold, suppress_missing_warnings=True)
-        self.regression_overlay = RegressionOverlay(df, target, visualize, missingness_threshold=missingness_threshold)
+        # RegressionOverlay normalises missing tokens, so build it before SharedOverlay
+        self.regression_overlay = RegressionOverlay(self.df, target, visualize, missingness_threshold=missingness_threshold, suppress_missing_warnings=True)
+        self.overlay = SharedOverlay(self.df, target, visualize, missingness_threshold=missingness_threshold, suppress_missing_warnings=True)
         self.report = {}
         
         # Generate consolidated missingness analysis

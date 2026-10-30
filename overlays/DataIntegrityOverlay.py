@@ -89,13 +89,14 @@ class DataIntegrityOverlay:
                         "correlated_with": correlations
                     }
 
+        has_high_missing = not high_missing_cols.empty or not high_missing_rows.empty
         summary = (
             f"Missingness detected in {len(high_missing_cols)} columns and {len(high_missing_rows)} rows."
-            if high_missing_cols.any() or high_missing_rows
+            if has_high_missing
             else "No significant missingness found."
         )
 
-        status = "ok" if not high_missing_cols.any() and not high_missing_rows else "warning"
+        status = "warning" if has_high_missing else "ok"
 
         actions = []
 
@@ -130,7 +131,8 @@ class DataIntegrityOverlay:
 
         for col in df.columns:
             if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
-                raw = df[col].astype(str)
+                # Only inspect present values; astype(str) would turn NaN into "nan"
+                raw = df[col].dropna().astype(str)
                 stripped = raw.str.strip()
 
                 count_null_like = stripped.isin(null_like).sum()
@@ -147,7 +149,8 @@ class DataIntegrityOverlay:
                     }
 
                     if self.FIX_WHITESPACE:
-                        self.df[col] = stripped  # Clean in-place
+                        # Clean in-place, leaving missing and non-string values untouched
+                        self.df[col] = df[col].map(lambda v: v.strip() if isinstance(v, str) else v)
 
         actions = []
 

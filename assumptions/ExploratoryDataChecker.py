@@ -220,7 +220,7 @@ class ExploratoryDataChecker:
 
         # Outliers
         outliers = self.report.get("outliers", {}).get("outliers_by_column", {})
-        flagged_outliers = [col for col, count in outliers.items() if count > 0]
+        flagged_outliers = [col for col, info in outliers.items() if info["count"] > 0]
         if flagged_outliers:
             suggestions["handle_outliers"] = [
                 "# Example: cap or remove outliers using IQR method",

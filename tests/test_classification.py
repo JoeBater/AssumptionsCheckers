@@ -10,7 +10,6 @@ def _recommendation(checker, algorithm):
     return next(r for r in checker.report["recommendations"] if r["algorithm"] == algorithm)
 
 
-@pytest.mark.xfail(strict=True, reason="bug #4: multicollinearity flag read inverted")
 def test_independent_features_do_not_penalise_logistic_regression(classification_df):
     checker = ClassificationAssumptionsChecker(classification_df, "t")
     checker.check_assumptions()
@@ -19,7 +18,6 @@ def test_independent_features_do_not_penalise_logistic_regression(classification
     assert "High multicollinearity detected" not in lr["notes"]
 
 
-@pytest.mark.xfail(strict=True, reason="bug #5: labels misaligned after dropna")
 def test_separability_with_missing_rows_matches_complete_case(classification_df):
     with_missing = classification_df.copy()
     with_missing.loc[::4, "p"] = np.nan
@@ -30,7 +28,6 @@ def test_separability_with_missing_rows_matches_complete_case(classification_df)
     assert got["overlap_score"] == expected["overlap_score"]
 
 
-@pytest.mark.xfail(strict=True, reason="bug #6: missing tokens replaced in caller df")
 def test_checker_does_not_modify_caller_df(classification_df):
     df = classification_df.copy()
     df["tag"] = ["NA"] + ["ok"] * (len(df) - 1)

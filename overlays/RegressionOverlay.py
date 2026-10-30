@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class RegressionOverlay:
-    def __init__(self, df, target, visualize=False, custom_missing_values=None, missingness_threshold=0.5):
+    def __init__(self, df, target, visualize=False, custom_missing_values=None, missingness_threshold=0.5, suppress_missing_warnings=False):
         self.df = df
         self.target = target
         self.visualize = visualize # not used currently
@@ -40,7 +40,19 @@ class RegressionOverlay:
                 + "\nTests will run on unmissing subset. Results may not generalize. "
                 + "\nConsider imputation or removing rows/columns with excessive missingness."
             )
-            print(self.report["missing_data"])
+            # Only print if not suppressed (for when we handle missingness centrally)
+            if not suppress_missing_warnings:
+                print(self.report["missing_data"])
+
+    def _numeric_design(self, df_to_use):
+        """Split into numeric predictors and target; OLS cannot take non-numeric columns."""
+        X = df_to_use.drop(columns=[self.target])
+        excluded = [col for col in X.columns if not pd.api.types.is_numeric_dtype(X[col]) or pd.api.types.is_bool_dtype(X[col])]
+        return X.drop(columns=excluded), df_to_use[self.target], excluded
+
+    @staticmethod
+    def _excluded_note(excluded):
+        return f" Non-numeric columns excluded: {excluded}." if excluded else ""
 
     # =======================================
     # Individual checks
@@ -59,8 +71,7 @@ class RegressionOverlay:
 
         # Use unmissing data only if missingness exists
         df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
-        y = df_to_use[self.target]
+        X, y, excluded = self._numeric_design(df_to_use)
 
         X_const = sm.add_constant(X)
         model = sm.OLS(y, X_const).fit()
@@ -72,7 +83,7 @@ class RegressionOverlay:
             "notes": (
                 "Linearity assumption holds." if reset_test.pvalue >= 0.05
                 else "Non-linearity detected."
-            )
+            ) + self._excluded_note(excluded)
         }
 
 
@@ -90,8 +101,7 @@ class RegressionOverlay:
             }
 
         df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
-        y = df_to_use[self.target]
+        X, y, excluded = self._numeric_design(df_to_use)
 
         X_const = sm.add_constant(X)
         model = sm.OLS(y, X_const).fit()
@@ -103,7 +113,7 @@ class RegressionOverlay:
             "notes": (
                 "Residuals appear normal." if p_value >= 0.05
                 else "Residuals deviate from normality."
-            ),
+            ) + self._excluded_note(excluded),
             "data_used": "Unmissing subset" if self.pc_missing > 0 else "Full dataset"
         }
 
@@ -238,8 +248,7 @@ class RegressionOverlay:
         
         # Use unmissing data only if missingness exists
         df_to_use = self.df_no_missing if self.pc_missing > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
-        y = df_to_use[self.target]
+        X, y, excluded = self._numeric_design(df_to_use)
 
         X_const = sm.add_constant(X)
         model = sm.OLS(y, X_const).fit()
@@ -249,8 +258,8 @@ class RegressionOverlay:
             "homoscedasticity": lm_pvalue >= 0.05,
             "p_value": lm_pvalue,
             "notes": (
-                "Residuals are homoscedastic." if lm_pvalue > 0.05 else "Residuals are heteroscedastic."
-            )
+                "Residuals are homoscedastic." if lm_pvalue >= 0.05 else "Residuals are heteroscedastic."
+            ) + self._excluded_note(excluded)
         }
 
     def check_tree_suitability(self):

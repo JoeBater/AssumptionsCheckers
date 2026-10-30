@@ -74,7 +74,7 @@ class ClassificationOverlay:
         X_proj = reducer.fit_transform(X)
 
         df_proj = pd.DataFrame(X_proj, columns=["dim1", "dim2"])
-        df_proj["label"] = y
+        df_proj["label"] = y.to_numpy()  # positional: y keeps the gaps left by dropna()
 
         centroids = df_proj.groupby("label")[["dim1", "dim2"]].mean()
         spreads = df_proj.groupby("label")[["dim1", "dim2"]].std().mean(axis=1)  # Average spread across dimensions

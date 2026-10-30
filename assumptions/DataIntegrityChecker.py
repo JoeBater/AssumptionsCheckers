@@ -6,11 +6,12 @@ from overlays.ConfidenceTrustOverlay import ConfidenceTrustOverlay
 
 class DataIntegrityChecker:
     def __init__(self, df, custom_missing_values=None, visualize=False):
-        self.df = df
+        # Work on a copy: checks such as the whitespace fix clean self.df in place
+        self.df = df.copy()
         self.custom_missing_values = custom_missing_values
-        self.data_integrity_overlay = DataIntegrityOverlay(df, self.custom_missing_values, visualize)
-        self.distributional_diagnostics_overlay = DistributionalDiagnosticsOverlay(df, visualize)
-        self.confidence_trust_overlay = ConfidenceTrustOverlay(df, visualize)
+        self.data_integrity_overlay = DataIntegrityOverlay(self.df, self.custom_missing_values, visualize)
+        self.distributional_diagnostics_overlay = DistributionalDiagnosticsOverlay(self.df, visualize)
+        self.confidence_trust_overlay = ConfidenceTrustOverlay(self.df, visualize)
         self.results = {}
 
     def run_all_checks(self):
@@ -95,7 +96,7 @@ class DataIntegrityChecker:
                 else:
                     base_report = "No constant or near-constant columns found."
 
-            elif check_name == "high_cardinality":
+            elif check_name == "cardinality":
                 hc = result.get("high_cardinality", {})
                 if hc:
                     top_hc = sorted(hc.items(), key=lambda x: -x[1]["unique_values"])[:5]
@@ -107,7 +108,7 @@ class DataIntegrityChecker:
                 else:
                     base_report = "No high-cardinality columns found."
 
-            elif check_name == "duplicates":
+            elif check_name == "duplicated_rows":
                 dup_count = result.get("duplicate_count", 0)
                 dup_preview = result.get("duplicate_indices", [])
                 if dup_count > 0:
