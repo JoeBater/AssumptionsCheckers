@@ -1,61 +1,33 @@
-
-import statsmodels.api as sm
-from statsmodels.stats.diagnostic import linear_reset
-from statsmodels.stats.diagnostic import het_breuschpagan
-
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
-from sklearn.preprocessing import LabelEncoder
-
-from statsmodels.stats.outliers_influence import variance_inflation_factor
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 import pandas as pd
 import numpy as np
-import warnings
-from collections import Counter
-from scipy.stats import shapiro
-from scipy.spatial.distance import pdist
+from scipy.spatial.distance import pdist, cdist
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-class ClassificationOverlay:
+from ._common import DEFAULT_MISSING_TOKENS, MissingnessAwareOverlay, split_numeric
+
+
+class ClassificationOverlay(MissingnessAwareOverlay):
     def __init__(self, df, target=None, visualize=False, custom_missing_values=None, missingness_threshold=0.5, suppress_missing_warnings=False):
-        self.df = df
-        self.target = target
-        self.visualize = visualize # not used currently
-        self.report = {}
-        self.row_missing_frac = 0.0
-        self.missingness_threshold = missingness_threshold
-
-        # Replace common string missing tokens with np.nan
-        default_missing_values = ["na", "NA", "NaN", "missing", "?", ".", "-999", "-9999"]
-        missing_values = set(custom_missing_values) if custom_missing_values else set(default_missing_values)   
-        self.df.replace(to_replace=missing_values, value=np.nan, inplace=True)
-        self.df_no_missing = self.df.dropna()
-        if self.df.isnull().any().any():
-            self.row_missing_frac = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
-            self.report["missing_data"] =  (
-                f"Warning: {self.row_missing_frac:.1%} of rows contain missing values. "
-                + "\nTests will run on unmissing subset. Results may not generalize. "
-                + "\nConsider imputation or removing rows/columns with excessive missingness."
-            )
-            # Only print if not suppressed (for when we handle missingness centrally)
-            if not suppress_missing_warnings:
-                print(self.report["missing_data"])
-
+        super().__init__(
+            df, target, visualize,
+            missingness_threshold=missingness_threshold,
+            suppress_missing_warnings=suppress_missing_warnings,
+            missing_tokens=custom_missing_values or DEFAULT_MISSING_TOKENS,
+        )
 
     def check_separability(self, method="pca", perplexity=30, random_state=1223):
         """
         Projects features into 2D and checks class separability visually and via overlap metrics.
         Returns spatial relationships analysis instead of raw projection data.
         """
-        if self.row_missing_frac > self.missingness_threshold:
-            self.report["missing_data"] = (
-                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
-                "\nSeparability test cannot proceed."
-            )
+        if self.too_much_missing("Separability test"):
             return {
                 "method": method,
                 "separable": None,
@@ -65,13 +37,24 @@ class ClassificationOverlay:
                 "recommendation": "Consider imputation or model-aware handling before assessing separability."
             }
 
-        # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
-        X = df_to_use.drop(columns=[self.target])
+        df_to_use = self.working_df
+        X, excluded = split_numeric(df_to_use.drop(columns=[self.target]))
         y = df_to_use[self.target]
 
+        if X.shape[1] < 2:
+            return {
+                "method": method,
+                "separable": None,
+                "overlap_score": None,
+                "notes": f"Fewer than two numeric features ({X.shape[1]}) — separability check skipped.",
+                "data_used": self.data_used,
+                "recommendation": None
+            }
+
+        # Standardise so the projection is not dominated by the largest-scale feature
+        X_scaled = StandardScaler().fit_transform(X)
         reducer = TSNE(n_components=2, perplexity=perplexity, random_state=random_state) if method == "tsne" else PCA(n_components=2)
-        X_proj = reducer.fit_transform(X)
+        X_proj = reducer.fit_transform(X_scaled)
 
         df_proj = pd.DataFrame(X_proj, columns=["dim1", "dim2"])
         df_proj["label"] = y.to_numpy()  # positional: y keeps the gaps left by dropna()
@@ -104,15 +87,18 @@ class ClassificationOverlay:
             else "Consider tree-based or kernel methods due to class overlap."
         )
 
-        return {
+        result = {
             "method": method,
             "overlap_score": round(overlap_score, 3),
             "separable": separable,
             "spatial_description": relationship_desc,
             "class_summary": class_summary,
-            "data_used": "Unmissing subset" if self.row_missing_frac > 0 else "Full dataset",
+            "data_used": self.data_used,
             "recommendation": recommendation
         }
+        if excluded:
+            result["excluded_columns"] = excluded
+        return result
 
     def _generate_spatial_description(self, method, centroids, spreads, mean_centroid_dist, mean_spread, separable):
         """Generate descriptive text about spatial relationships between class centroids."""
@@ -135,9 +121,6 @@ class ClassificationOverlay:
 
     def _generate_class_summary_table(self, centroids, spreads, centroid_distances):
         """Generate a summary table of class centroids, spreads, and overlap notes."""
-        import itertools
-        from scipy.spatial.distance import cdist
-        
         class_summary = []
         classes = centroids.index.tolist()
         
@@ -188,21 +171,16 @@ class ClassificationOverlay:
         """
         Checks for redundant features via correlation and mutual information clustering.
         """
-        if self.row_missing_frac > self.missingness_threshold:
-            self.report["missing_data"] = (
-                f"Error: {self.row_missing_frac:.1%} of rows have missing values, above the {self.missingness_threshold:.0%} threshold. "
-                "\nRedundancy check cannot proceed."
-            )
+        if self.too_much_missing("Redundancy check"):
             return {
                 "redundant_pairs": None,
                 "mutual_info_scores": None,
                 "notes": f"Only {1.0 - self.row_missing_frac:.1%} of rows are complete — redundancy check skipped.",
-                "data_used": "Unmissing subset" if self.row_missing_frac > 0 else "Full dataset",
+                "data_used": self.data_used,
                 "recommendation": "Consider imputation or column pruning before assessing redundancy."
             }
 
-        # Use unmissing data only if missingness exists
-        df_to_use = self.df_no_missing if self.row_missing_frac > 0 else self.df
+        df_to_use = self.working_df
         X = df_to_use.drop(columns=[self.target])
         y = df_to_use[self.target]
 
@@ -242,6 +220,6 @@ class ClassificationOverlay:
             "redundant_pairs": redundant_pairs,
             "mutual_info_scores": mi_scores,
             "notes": notes,
-            "data_used": "Unmissing subset" if self.row_missing_frac > 0 else "Full dataset",
+            "data_used": self.data_used,
             "recommendation": recommendation
         }

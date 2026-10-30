@@ -3,6 +3,9 @@ import numpy as np
 from scipy.stats import skew, kurtosis, zscore
 from statsmodels import robust
 
+# Conventional cut-offs: |z| > 3, Tukey's fences at 1.5 IQR, Iglewicz-Hoaglin |modified z| > 3.5
+DEFAULT_OUTLIER_THRESHOLDS = {"zscore": 3.0, "iqr": 1.5, "mad": 3.5}
+
 class ExploratoryDataChecker:
     def __init__(self, df, visualize=False, replace_missing=False):
         self.df = df.copy()
@@ -73,22 +76,28 @@ class ExploratoryDataChecker:
 
     
 
-    def check_outliers(self, method="auto", threshold=1.5):
+    def check_outliers(self, method="auto", threshold=None):
         """
         Detects outliers using IQR, Z-score, MAD, or auto-selected method per column.
 
         Parameters:
         - method: "auto", "iqr", "zscore", "mad"
-        - threshold: float, sensitivity parameter
+        - threshold: float, sensitivity parameter; None uses each method's
+          conventional default (z-score 3, IQR 1.5, modified z-score 3.5)
 
         Returns:
         - dict with outlier counts, values, methods used, and notes
         """
+        if method != "auto" and method not in DEFAULT_OUTLIER_THRESHOLDS:
+            raise ValueError(f"Unsupported method: {method}")
+
         numeric = self.df.select_dtypes(include=[np.number])
         outlier_summary = {}
 
         for col in numeric.columns:
             x = numeric[col].dropna()
+            if x.empty:
+                continue
 
             # Auto-select method based on distribution
             if method == "auto":
@@ -102,31 +111,37 @@ class ExploratoryDataChecker:
                     chosen = "mad"
             else:
                 chosen = method
+            col_threshold = threshold if threshold is not None else DEFAULT_OUTLIER_THRESHOLDS[chosen]
 
             # Apply chosen method
             if chosen == "iqr":
                 q1, q3 = x.quantile(0.25), x.quantile(0.75)
                 iqr = q3 - q1
-                lower, upper = q1 - threshold * iqr, q3 + threshold * iqr
+                lower, upper = q1 - col_threshold * iqr, q3 + col_threshold * iqr
                 mask = (x < lower) | (x > upper)
 
             elif chosen == "zscore":
                 zs = zscore(x)
-                mask = np.abs(zs) > threshold
+                mask = np.abs(zs) > col_threshold
 
-            elif chosen == "mad":
+            else:  # mad
                 median = x.median()
-                mad = robust.mad(x)
-                mod_z = 0.6745 * (x - median) / mad
-                mask = np.abs(mod_z) > threshold
-
-            else:
-                raise ValueError(f"Unsupported method: {chosen}")
+                # robust.mad is already rescaled (raw MAD / 0.6745), so this is the
+                # Iglewicz-Hoaglin modified z-score 0.6745 * (x - median) / raw MAD
+                scale = robust.mad(x)
+                if scale == 0:
+                    # Over half the values equal the median; fall back to the mean absolute deviation
+                    scale = 1.253314 * np.mean(np.abs(x - median))
+                if scale == 0:
+                    mask = pd.Series(False, index=x.index)
+                else:
+                    mask = np.abs(x - median) / scale > col_threshold
 
             flagged = x[mask].tolist()
             inliers = x[~mask].tolist()
             outlier_summary[col] = {
                 "method": chosen,
+                "threshold": col_threshold,
                 "count": len(flagged),
                 "percent_flagged": round(len(flagged) / len(x), 4),
                 "outlier_range": [min(flagged), max(flagged)] if len(flagged) > 0 else None,

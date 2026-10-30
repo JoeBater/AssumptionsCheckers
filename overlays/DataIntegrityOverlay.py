@@ -46,6 +46,8 @@ class DataIntegrityOverlay:
         else:
             results["embedded_rows"] = self.check_embedded_rows_by_regex()
 
+        return results
+
     # =======================================
     # Individual checks
     # =======================================
@@ -336,21 +338,16 @@ class DataIntegrityOverlay:
     
     
 
-    def check_embedded_rows_by_regex(self, delimiter="|", sample_size=100):
+    def check_embedded_rows_by_regex(self, delimiter="|", min_fields=3):
+        """Flag string cells containing at least min_fields delimiters, whatever their length."""
         df = self.df.copy()
         embedded_cells = []
 
         for col in df.columns:
             if df[col].dtype == object or df[col].dtype.name == "string":
-                samples = df[col].dropna().astype(str).sample(min(sample_size, len(df)))
-                pattern = re.compile(r"^" + re.escape(samples.iloc[0]) + r"$")
-
-                for val in samples:
-                    pattern = re.compile(r"^" + re.escape(val) + r"$")  # simplistic fallback
-
-                for idx, val in df[col].dropna().items():
-                    if not pattern.match(str(val)) and delimiter in str(val):
-                        embedded_cells.append((idx, col, val))
+                values = df[col].dropna().astype(str)
+                hits = values[values.str.count(re.escape(delimiter)) >= min_fields]
+                embedded_cells.extend((idx, col, val) for idx, val in hits.items())
 
         # summary, status, actions as before...
         summary = (

@@ -1,0 +1,4 @@
+# Strip notebook noise (execution counts, kernel metadata) on commit.
+# Takes effect once each clone runs the nbstripout install command in the README.
+*.ipynb filter=nbstripout
+*.ipynb diff=ipynb

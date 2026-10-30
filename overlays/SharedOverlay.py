@@ -1,48 +1,20 @@
-import statsmodels.api as sm
-from statsmodels.stats.diagnostic import linear_reset
-from statsmodels.stats.diagnostic import het_breuschpagan
-
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
-from sklearn.preprocessing import LabelEncoder
-
-from statsmodels.stats.outliers_influence import variance_inflation_factor
-
 import pandas as pd
 import numpy as np
-import warnings
 from collections import Counter
-from scipy.stats import shapiro
-from scipy.spatial.distance import pdist
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 from .ScalingOverlay import ScalingOverlay
+from ._common import MissingnessAwareOverlay, vif_drop_set
 
-class SharedOverlay:
+
+class SharedOverlay(MissingnessAwareOverlay):
     def __init__(self, df, target, visualize=False, missingness_threshold=0.5, suppress_missing_warnings=False):
-        self.df = df
-        self.target = target
-        self.visualize = visualize
-        self.missingness_threshold = missingness_threshold  # proportion
-        self.cell_missing_frac = self.df.isnull().mean().mean()  # proportion of cells
-        self.row_missing_frac = 0.0  # proportion of rows with any missing value
-        self.report = {}
-
-        # Check for missing data
-        self.df_no_missing = self.df.dropna()
-        if self.df.isnull().any().any():
-            self.row_missing_frac = (len(self.df) - len(self.df_no_missing)) / len(self.df) 
-            self.report["missing_data"] =  (
-                f"Warning: {self.row_missing_frac:.1%} of rows contain missing values. "
-                + "\nTests will run on unmissing subset. Results may not generalize. "
-                + "\nConsider imputation or removing rows/columns with excessive missingness."
-            )
-            # Only print if not suppressed (for when we handle missingness centrally)
-            if not suppress_missing_warnings:
-                print(self.report["missing_data"])
+        super().__init__(
+            df, target, visualize,
+            missingness_threshold=missingness_threshold,
+            suppress_missing_warnings=suppress_missing_warnings,
+        )
 
     # =======================================
     # Individual checks
@@ -98,57 +70,8 @@ class SharedOverlay:
                 "recommendation": None
             }
 
-        def compute_vif(data):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                vifs = []
-                for i in range(data.shape[1]):
-                    try:
-                        vif = variance_inflation_factor(data.values, i)
-                    except np.linalg.LinAlgError:
-                        vif = float("inf")
-                    except ValueError:
-                        vif = float("inf")  # Use inf instead of None for consistency
-                    vifs.append(vif)
-                
-                # Explicitly create DataFrame with proper types
-                df = pd.DataFrame({
-                    "feature": data.columns.tolist(),
-                    "VIF": vifs
-                })
-                # Ensure VIF column is numeric
-                df["VIF"] = pd.to_numeric(df["VIF"], errors='coerce')
-                return df
+        vif_data, drop_set = vif_drop_set(X, threshold)
 
-        vif_data = compute_vif(X)
-        too_high = vif_data[vif_data["VIF"] > threshold]
-
-        drop_set = []
-        X_temp = X.copy()
-
-        while not too_high.empty and X_temp.shape[1] > 1:
-            # choose feature with highest VIF to drop
-            # Use explicit indexing to avoid type checker issues
-            max_vif_idx = too_high["VIF"].idxmax()
-            to_drop = too_high.loc[max_vif_idx, "feature"]
-            drop_set.append(to_drop)
-            X_temp = X_temp.drop(columns=[to_drop])
-
-            if X_temp.shape[1] == 0:
-                break  # Prevent zero-size array crash
-
-            vif_data = compute_vif(X_temp)
-            too_high = vif_data[vif_data["VIF"] > threshold]
-
-        if X_temp.shape[1] == 0:
-            return {
-                "has_multicollinearity": True,
-                "details": [],
-                "notes": "All predictors dropped due to perfect multicollinearity.",
-                "recommendation": "Rebuild feature set to avoid linear dependence.",
-                "drop_set": drop_set
-            }
-        
         recommendation = (
             f"High or perfect multicollinearity detected. "
             f"Consider removing these features: {drop_set}" if drop_set else None
