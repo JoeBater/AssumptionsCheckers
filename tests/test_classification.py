@@ -132,3 +132,42 @@ def test_separability_excludes_non_numeric_columns(classification_df, rng):
     result = ClassificationOverlay(df, "t").check_separability()
     assert result["separable"] is not None
     assert result["excluded_columns"] == ["colour"]
+
+
+def test_category_and_string_columns_are_excluded_from_vif(classification_df, rng):
+    from overlays.SharedOverlay import SharedOverlay
+    df = classification_df.copy()
+    df["c"] = pd.Categorical(rng.choice(["u", "v"], len(df)))
+    df["s"] = pd.array(rng.choice(["x", "y"], len(df)), dtype="string")
+    result = SharedOverlay(df, "t").check_multicollinearity()
+    assert result["has_multicollinearity"] is False
+    assert "['c', 's']" in result["notes"]
+
+
+def test_missing_target_labels_are_not_classes(classification_df):
+    from overlays.SharedOverlay import SharedOverlay
+    df = classification_df.copy()
+    df["t"] = df["t"].astype(float)
+    df.loc[:9, "t"] = np.nan
+    result = SharedOverlay(df, "t").check_class_imbalance()
+    assert sorted(result["class_counts"]) == [0.0, 1.0]
+    assert result["missing_labels"] == 10
+    assert result["is_imbalanced"] is False
+
+
+def test_single_class_target_skips_separability(classification_df):
+    df = classification_df.copy()
+    df["t"] = 1
+    result = ClassificationOverlay(df, "t").check_separability()
+    assert result["separable"] is None
+    assert "1 class" in result["notes"]
+
+
+def test_export_json_keeps_native_types(classification_df):
+    import json
+    checker = ClassificationAssumptionsChecker(classification_df, "t", algorithm="RandomForestClassifier")
+    checker.check_assumptions()
+    exported = json.loads(checker.export_report("json"))["assumptions"]
+    assert exported["class_imbalance"]["is_imbalanced"] is False
+    assert exported["tree_suitability"]["tree_suitability"] is True
+    assert set(exported["class_imbalance"]["class_counts"]) == {"0", "1"}

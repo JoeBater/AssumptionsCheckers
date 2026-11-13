@@ -8,6 +8,27 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 DEFAULT_MISSING_TOKENS = ["na", "NA", "NaN", "missing", "?", ".", "-999", "-9999"]
 
 
+def is_text(series):
+    """True for object, pandas 3 "str" and StringDtype columns."""
+    return pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series)
+
+
+def missing_token_mask(series, tokens):
+    """True where a value is a missing-value placeholder.
+
+    Tokens match as stripped text, and numeric tokens also match by value,
+    so "-999" catches the string "-999" as well as the numbers -999 and -999.0.
+    """
+    text_tokens = {str(t).strip() for t in tokens}
+    numeric_tokens = set(pd.to_numeric(pd.Series(sorted(text_tokens)), errors="coerce").dropna())
+    values = series.astype(object)  # sidesteps categorical and nullable dtypes
+    present = values.notna()
+    mask = present & values.astype(str).str.strip().isin(text_tokens)
+    if numeric_tokens:
+        mask |= present & pd.to_numeric(values, errors="coerce").isin(numeric_tokens)
+    return mask
+
+
 class MissingnessAwareOverlay:
     """Base for overlays whose checks run on the complete-case subset of the data."""
 
@@ -21,7 +42,7 @@ class MissingnessAwareOverlay:
 
         # Replace placeholder tokens (e.g. "?") with NaN; the checkers pass in their own copy
         if missing_tokens:
-            self.df.replace(to_replace=set(missing_tokens), value=np.nan, inplace=True)
+            self._replace_missing_tokens(missing_tokens)
 
         self.cell_missing_frac = self.df.isnull().mean().mean()  # proportion of cells
         self.df_no_missing = self.df.dropna()
@@ -35,6 +56,20 @@ class MissingnessAwareOverlay:
             # Only print if not suppressed (for when we handle missingness centrally)
             if not suppress_missing_warnings:
                 print(self.report["missing_data"])
+
+    def _replace_missing_tokens(self, tokens):
+        for col in self.df.columns:
+            is_token = missing_token_mask(self.df[col], tokens)
+            if not is_token.any():
+                continue
+            cleaned = self.df[col].mask(is_token)
+            if is_text(cleaned):
+                # A numeric column read as text because of placeholders: restore its numeric dtype
+                try:
+                    cleaned = pd.to_numeric(cleaned)
+                except (ValueError, TypeError):
+                    pass
+            self.df[col] = cleaned
 
     @property
     def working_df(self):

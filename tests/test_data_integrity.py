@@ -54,3 +54,22 @@ def test_embedded_rows_by_regex_flags_delimited_cells():
 def test_run_checks_returns_results(messy_df):
     results = DataIntegrityOverlay(messy_df.copy()).run_checks()
     assert {"missingness", "whitespace", "constancy", "cardinality", "duplicates", "embedded_rows"} <= results.keys()
+
+
+def test_string_dtype_columns_are_checked():
+    df = pd.DataFrame({"id": pd.array([f"u{i}" for i in range(20)], dtype="string"),
+                       "s": pd.array(["a|b|c|d"] + ["x"] * 19, dtype="string")})
+    overlay = DataIntegrityOverlay(df)
+    assert "id" in overlay.check_high_cardinality()["high_cardinality"]
+    assert len(overlay.check_embedded_rows_by_regex()["embedded_cells"]) == 1
+
+
+def test_numeric_sentinels_are_detected():
+    df = pd.DataFrame({"a": [1, -999, 3], "b": [1.0, 2.0, -999.0], "c": ["x", "-999", "y"]})
+    hits = DataIntegrityOverlay(df).check_missingness()["custom_missing_hits"]
+    assert hits == {"a": 1, "b": 1, "c": 1}
+
+
+def test_high_missing_rows_with_string_index():
+    df = pd.DataFrame({c: [np.nan, 1, 2] for c in "abcde"}, index=["r1", "r2", "r3"])
+    assert DataIntegrityOverlay(df).check_missingness()["high_missing_rows"] == {"r1": 1.0}

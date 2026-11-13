@@ -10,14 +10,15 @@ readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Joe Bater" }]
 requires-python = ">=3.9"
+# Tested on pandas 2.2 and 3.1, statsmodels 0.14 and 0.15, numpy 1.26 and 2.x
 dependencies = [
     "matplotlib",
-    "numpy",
-    "pandas",
-    "scikit-learn",
+    "numpy>=1.26",
+    "pandas>=2.2,<4",
+    "scikit-learn>=1.5",
     "scipy",
     "seaborn",
-    "statsmodels",
+    "statsmodels>=0.14",
 ]
 
 [project.optional-dependencies]

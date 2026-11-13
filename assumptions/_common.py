@@ -1,3 +1,8 @@
+import json
+
+import numpy as np
+import pandas as pd
+
 NO_ALGORITHM_NOTE = (
     "ℹ️ No algorithm specified — running all checks and ranking candidate models. "
     "Pass algorithm='...' to check a specific model (see help_algorithms())."
@@ -11,6 +16,32 @@ VERDICT_KEYS = {
 
 
 SUITABILITY_ORDER = {"high": 3, "medium": 2, "low": 1, "unsuitable": 0}
+
+
+def _builtin_key(key):
+    """JSON object keys must be str, int, float, bool or None."""
+    if isinstance(key, np.generic):
+        key = key.item()
+    return key if key is None or isinstance(key, (str, int, float, bool)) else str(key)
+
+
+def to_builtin(obj):
+    """Recursively convert numpy/pandas values (including dict keys) to JSON-native types."""
+    if isinstance(obj, dict):
+        return {_builtin_key(k): to_builtin(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [to_builtin(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return [to_builtin(v) for v in obj.tolist()]
+    if isinstance(obj, (pd.Series, pd.Index)):
+        return [to_builtin(v) for v in obj.tolist()]
+    if isinstance(obj, pd.DataFrame):
+        return to_builtin(obj.to_dict(orient="records"))
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if obj is None or isinstance(obj, (str, bool, int, float)):
+        return obj
+    return str(obj)
 
 
 def verdict(result, key):
@@ -112,8 +143,7 @@ class BaseAssumptionsChecker:
 
     def export_report(self, format="dict"):
         if format == "json":
-            import json
-            return json.dumps(self.report, indent=2, default=str)
+            return json.dumps(to_builtin(self.report), indent=2)
         return self.report
 
     def report_assumptions(self):
