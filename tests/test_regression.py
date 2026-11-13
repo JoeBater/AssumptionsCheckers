@@ -79,3 +79,30 @@ def test_missing_percentage_is_formatted_as_percent(mostly_missing_df):
 def test_no_algorithm_prints_note(regression_df, capsys):
     RegressionAssumptionsChecker(regression_df, "t").check_assumptions()
     assert "No algorithm specified" in capsys.readouterr().out
+
+
+def test_placeholder_in_numeric_column_restores_numeric_dtype(regression_df):
+    df = regression_df.copy()
+    df["p"] = df["p"].astype(str)  # as read from a CSV containing "?"
+    df.loc[0, "p"] = "?"
+    checker = RegressionAssumptionsChecker(df, "t", algorithm="LinearRegression")
+    results = checker.check_assumptions()
+    assert pd.api.types.is_float_dtype(checker.df["p"])
+    assert "excluded" not in results["linearity"]["notes"]
+
+
+def test_all_non_numeric_predictors_skip_ols_checks(rng):
+    df = pd.DataFrame({"a": rng.choice(["u", "v"], 50), "b": rng.choice(["x", "y"], 50), "t": rng.normal(size=50)})
+    results = RegressionAssumptionsChecker(df, "t", algorithm="LinearRegression").check_assumptions()
+    for check, key in [("linearity", "linearity"), ("homoscedasticity", "homoscedasticity"), ("normality", "normality")]:
+        assert results[check][key] is None
+    assert results["status"] == "unknown"
+
+
+def test_export_json_keeps_booleans(regression_df):
+    import json
+    checker = RegressionAssumptionsChecker(regression_df, "t", algorithm="LinearRegression")
+    checker.check_assumptions()
+    exported = json.loads(checker.export_report("json"))["assumptions"]
+    assert isinstance(exported["linearity"]["linearity"], bool)
+    assert exported["scaling"]["required_for_model"] is False

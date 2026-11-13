@@ -16,11 +16,16 @@ class RegressionOverlay(MissingnessAwareOverlay):
         )
 
     def _fit_ols(self):
-        """Fit OLS on numeric predictors; OLS cannot take non-numeric columns."""
+        """Fit OLS on numeric predictors; OLS cannot take non-numeric columns.
+
+        Returns (None, note) when no non-constant numeric predictor remains.
+        """
         df_to_use = self.working_df
         X, excluded = split_numeric(df_to_use.drop(columns=[self.target]))
-        model = sm.OLS(df_to_use[self.target], sm.add_constant(X)).fit()
         note = f" Non-numeric columns excluded: {excluded}." if excluded else ""
+        if (X.nunique() > 1).sum() == 0:
+            return None, " No non-constant numeric predictors, so the test cannot run." + note
+        model = sm.OLS(df_to_use[self.target], sm.add_constant(X)).fit()
         return model, note
 
     # =======================================
@@ -35,6 +40,8 @@ class RegressionOverlay(MissingnessAwareOverlay):
             }
 
         model, excluded_note = self._fit_ols()
+        if model is None:
+            return {"linearity": None, "p_value": None, "notes": "Linearity test skipped." + excluded_note}
         reset_test = linear_reset(model, power=2, use_f=True)
 
         return {
@@ -56,6 +63,9 @@ class RegressionOverlay(MissingnessAwareOverlay):
             }
 
         model, excluded_note = self._fit_ols()
+        if model is None:
+            return {"normality": None, "p_value": None, "notes": "Residual normality test skipped." + excluded_note,
+                    "data_used": self.data_used}
         stat, p_value = shapiro(model.resid)
 
         return {
@@ -130,6 +140,8 @@ class RegressionOverlay(MissingnessAwareOverlay):
             }
 
         model, excluded_note = self._fit_ols()
+        if model is None:
+            return {"homoscedasticity": None, "p_value": None, "notes": "Heteroscedasticity test skipped." + excluded_note}
         lm_stat, lm_pvalue, f_stat, f_pvalue = het_breuschpagan(model.resid, model.model.exog)
 
         return {

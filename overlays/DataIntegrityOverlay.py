@@ -20,7 +20,7 @@ from scipy.spatial.distance import pdist
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-import warnings
+from ._common import is_text, missing_token_mask
 
 class DataIntegrityOverlay:
 
@@ -62,7 +62,7 @@ class DataIntegrityOverlay:
 
         # Include custom proxies
         for col in df.columns:
-            proxy_mask = df[col].astype(str).str.strip().isin(missing_values)
+            proxy_mask = missing_token_mask(df[col], missing_values)
             missing_mask[col] = missing_mask[col] | proxy_mask
 
         # Column and row missingness
@@ -115,7 +115,9 @@ class DataIntegrityOverlay:
 
         return {
             "high_missing_columns": high_missing_cols.round(3).to_dict(),
-            "high_missing_rows": {int(idx): round(pct, 3) for idx, pct in row_missing_pct[row_missing_pct > row_threshold].items()},
+            # Index labels may be strings or dates, so only unwrap numpy scalars
+            "high_missing_rows": {(idx.item() if isinstance(idx, np.generic) else idx): round(pct, 3)
+                                  for idx, pct in row_missing_pct[row_missing_pct > row_threshold].items()},
             "custom_missing_hits": {col: int(missing_mask[col].sum()) for col in df.columns if missing_mask[col].sum() > 0},
             "missingness_hints": hints,
             "total_missing_cells": int(missing_mask.sum().sum()),
@@ -132,7 +134,7 @@ class DataIntegrityOverlay:
         null_like = {"", " ", "\t", "\n", "n/a", "na", "none", "null", "?"}
 
         for col in df.columns:
-            if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
+            if is_text(df[col]):
                 # Only inspect present values; astype(str) would turn NaN into "nan"
                 raw = df[col].dropna().astype(str)
                 stripped = raw.str.strip()
@@ -147,7 +149,7 @@ class DataIntegrityOverlay:
                         "null_like": int(count_null_like),
                         "leading_space": int(count_leading),
                         "trailing_space": int(count_trailing),
-                        "total": total_issues
+                        "total": int(total_issues)
                     }
 
                     if self.FIX_WHITESPACE:
@@ -230,7 +232,7 @@ class DataIntegrityOverlay:
         high_cardinality = {}
 
         for col in df.columns:
-            if df[col].dtype == object or df[col].dtype.name == "string":
+            if is_text(df[col]):
                 unique_count = df[col].nunique(dropna=True)
                 total_count = df[col].count()
                 unique_ratio = unique_count / total_count if total_count > 0 else 0
@@ -307,7 +309,7 @@ class DataIntegrityOverlay:
         embedded_cells = []
 
         for col in df.columns:
-            if df[col].dtype == object or df[col].dtype.name == "string":
+            if is_text(df[col]):
                 lengths = df[col].dropna().astype(str).apply(len)
                 median_len = lengths.median()
                 threshold = median_len * deviation_factor
@@ -344,7 +346,7 @@ class DataIntegrityOverlay:
         embedded_cells = []
 
         for col in df.columns:
-            if df[col].dtype == object or df[col].dtype.name == "string":
+            if is_text(df[col]):
                 values = df[col].dropna().astype(str)
                 hits = values[values.str.count(re.escape(delimiter)) >= min_fields]
                 embedded_cells.extend((idx, col, val) for idx, val in hits.items())

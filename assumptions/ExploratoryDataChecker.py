@@ -3,6 +3,8 @@ import numpy as np
 from scipy.stats import skew, kurtosis, zscore
 from statsmodels import robust
 
+from overlays._common import is_text, missing_token_mask
+
 # Conventional cut-offs: |z| > 3, Tukey's fences at 1.5 IQR, Iglewicz-Hoaglin |modified z| > 3.5
 DEFAULT_OUTLIER_THRESHOLDS = {"zscore": 3.0, "iqr": 1.5, "mad": 3.5}
 
@@ -13,45 +15,45 @@ class ExploratoryDataChecker:
         self.visualize = visualize
         self.report = {}
 
-    def check_missing_values(self, custom_missing=None, replace_missing=False):
+    def check_missing_values(self, custom_missing=None, replace_missing=None):
         """
         Checks for missing values, including custom placeholders.
 
         Parameters:
-        - custom_missing: list of strings/numbers treated as missing
-        - replace_missing: bool, whether to replace custom values with np.nan
+        - custom_missing: list of strings/numbers treated as missing; numeric
+          tokens also match numbers, so "-999" catches -999 and -999.0
+        - replace_missing: bool, whether to replace custom values with np.nan in
+          the checker's copy of the data; None uses the constructor setting
 
         Returns:
         - dict with missing value summary and advisory notes
         """
         if custom_missing is None:
             custom_missing = ["?", "missing", "-9999", "-999", "NA", "N/A"]
+        if replace_missing is None:
+            replace_missing = self.replace_missing
 
-        df = self.df.copy()
-        if replace_missing:
-            df = df.replace(custom_missing, np.nan)
-
-        # Standard missing values
-        standard_missing = df.isnull().sum()
-
-        # Custom missing values per column
-        custom_missing_by_column = {
-            col: sum((self.df[col] == val).sum() for val in custom_missing)
-            for col in self.df.columns
-        }
+        # Count standard NaNs before any placeholder is replaced, so nothing is counted twice
+        standard_missing = self.df.isnull().sum()
+        custom_masks = {col: missing_token_mask(self.df[col], custom_missing) for col in self.df.columns}
 
         # Filter to only columns with actual missing values
         column_summary = {}
         for col in self.df.columns:
-            std_missing = int(standard_missing[col])
-            custom_missing = int(custom_missing_by_column[col])
-            total = std_missing + custom_missing
+            std_count = int(standard_missing[col])
+            custom_count = int(custom_masks[col].sum())
+            total = std_count + custom_count
             if total > 0:
                 column_summary[col] = {
-                    "standard_missing": std_missing,
-                    "custom_missing": custom_missing,
+                    "standard_missing": std_count,
+                    "custom_missing": custom_count,
                     "total": total
                 }
+
+        if replace_missing:
+            for col, mask in custom_masks.items():
+                if mask.any():
+                    self.df[col] = self.df[col].mask(mask)
 
         total_missing = sum(v["total"] for v in column_summary.values())
 
@@ -170,7 +172,7 @@ class ExploratoryDataChecker:
 
 
     def check_whitespace_strings(self):
-        string_cols = self.df.select_dtypes(include="object")
+        string_cols = self.df[[col for col in self.df.columns if is_text(self.df[col])]]
         flagged = {}
         for col in string_cols.columns:
             mask = string_cols[col].astype(str).apply(lambda x: x != x.strip())
@@ -188,8 +190,8 @@ class ExploratoryDataChecker:
         }
 
     def check_high_cardinality(self, threshold=50):
-        categorical = self.df.select_dtypes(include="object")
-        high_card = {col: self.df[col].nunique() for col in categorical.columns if self.df[col].nunique() > threshold}
+        categorical = [col for col in self.df.columns if is_text(self.df[col])]
+        high_card = {col: self.df[col].nunique() for col in categorical if self.df[col].nunique() > threshold}
         return {
             "high_cardinality": high_card,
             "threshold": threshold,
@@ -226,9 +228,12 @@ class ExploratoryDataChecker:
         # Missing values
         mv = self.report.get("missing_values", {})
         if mv.get("total_missing", 0) > 0:
+            tokens = list(mv["custom_missing_values"])
+            # Numeric forms too, so sentinels like -999 in numeric columns are replaced
+            numeric_tokens = sorted({float(v) for v in pd.to_numeric(pd.Series(tokens, dtype=object), errors="coerce").dropna()})
             suggestions["handle_missing_values"] = [
                 "# Replace custom missing values with NaN",
-                f"df.replace({mv['custom_missing_values']}, np.nan, inplace=True)",
+                f"df.replace({tokens + numeric_tokens}, np.nan, inplace=True)",
                 "# Optionally drop rows or columns with too many NaNs",
                 "df.dropna(axis=0, thresh=MIN_NON_NAN_VALUES)  # or axis=1"
             ]

@@ -10,7 +10,7 @@ from scipy.spatial.distance import pdist, cdist
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from ._common import DEFAULT_MISSING_TOKENS, MissingnessAwareOverlay, split_numeric
+from ._common import DEFAULT_MISSING_TOKENS, MissingnessAwareOverlay, is_text, split_numeric
 
 
 class ClassificationOverlay(MissingnessAwareOverlay):
@@ -41,12 +41,18 @@ class ClassificationOverlay(MissingnessAwareOverlay):
         X, excluded = split_numeric(df_to_use.drop(columns=[self.target]))
         y = df_to_use[self.target]
 
-        if X.shape[1] < 2:
+        skip_reason = None
+        n_classes = y.nunique()
+        if n_classes < 2:
+            skip_reason = f"Target has {n_classes} class{'' if n_classes == 1 else 'es'} — separability is not applicable."
+        elif X.shape[1] < 2:
+            skip_reason = f"Fewer than two numeric features ({X.shape[1]}) — separability check skipped."
+        if skip_reason:
             return {
                 "method": method,
                 "separable": None,
                 "overlap_score": None,
-                "notes": f"Fewer than two numeric features ({X.shape[1]}) — separability check skipped.",
+                "notes": skip_reason,
                 "data_used": self.data_used,
                 "recommendation": None
             }
@@ -184,7 +190,7 @@ class ClassificationOverlay(MissingnessAwareOverlay):
         X = df_to_use.drop(columns=[self.target])
         y = df_to_use[self.target]
 
-        for col in X.select_dtypes(include=["object", "category"]).columns:
+        for col in [c for c in X.columns if is_text(X[c]) or isinstance(X[c].dtype, pd.CategoricalDtype)]:
             X[col] = LabelEncoder().fit_transform(X[col])
 
         corr_matrix = X.corr().abs()

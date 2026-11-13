@@ -5,7 +5,7 @@ from collections import Counter
 import matplotlib.pyplot as plt
 
 from .ScalingOverlay import ScalingOverlay
-from ._common import MissingnessAwareOverlay, vif_drop_set
+from ._common import MissingnessAwareOverlay, is_text, split_numeric, vif_drop_set
 
 
 class SharedOverlay(MissingnessAwareOverlay):
@@ -35,19 +35,11 @@ class SharedOverlay(MissingnessAwareOverlay):
                 "recommendation": "Missing values detected, downstream classifiers like XGBoost or CatBoost may tolerate missingness natively. Consider whether imputation is necessary based on your modeling choice."
             }
         
-        non_numeric = [col for col in X.columns if not np.issubdtype(X[col].dtype, np.number)]
-        if non_numeric:
-            return {
-                "has_multicollinearity": None,
-                "details": None,
-                "notes": f"Non-numeric columns present — multicollinearity check skipped: {non_numeric}",
-                "recommendation": "Recast or exclude non-numeric columns before running VIF."
-            }
-        
+        X, excluded = split_numeric(X)  # VIF only for numeric predictors
+        excluded_note = f" Non-numeric columns excluded: {excluded}." if excluded else ""
 
-      
         # Checks for infinite values in the dataset.  Returns a summary of affected columns and counts.
-        inf_mask = np.isinf(self.df.select_dtypes(include=[np.number]))
+        inf_mask = np.isinf(X)
         inf_counts = inf_mask.sum()
 
         flagged = inf_counts[inf_counts > 0]
@@ -66,7 +58,7 @@ class SharedOverlay(MissingnessAwareOverlay):
             return {
                 "has_multicollinearity": False,
                 "details": None,
-                "notes": "Only one predictor — multicollinearity check not applicable.",
+                "notes": f"Fewer than two numeric predictors ({X.shape[1]}) — multicollinearity check not applicable." + excluded_note,
                 "recommendation": None
             }
 
@@ -80,9 +72,9 @@ class SharedOverlay(MissingnessAwareOverlay):
             "has_multicollinearity": len(drop_set) > 0,
             "details": vif_data.to_dict(orient="records"),
             "notes": (
-                "Perfect or high multicollinearity detected" if drop_set 
+                "Perfect or high multicollinearity detected." if drop_set
                 else "No severe multicollinearity."
-            ),
+            ) + excluded_note,
             "recommendation": recommendation,
             "drop_set": drop_set
         }
@@ -95,7 +87,8 @@ class SharedOverlay(MissingnessAwareOverlay):
 
         if n_samples < 50:
             issues.append("Very small dataset — tree-based models may overfit.")
-        if any(X[col].nunique() > n_samples * 0.5 for col in X.select_dtypes(include="object")):
+        categorical = [col for col in X.columns if is_text(X[col]) or isinstance(X[col].dtype, pd.CategoricalDtype)]
+        if any(X[col].nunique() > n_samples * 0.5 for col in categorical):
             issues.append("High-cardinality categorical features may cause overfitting.")
         if n_features > n_samples:
             issues.append("More features than samples — trees may struggle.")
@@ -117,10 +110,10 @@ class SharedOverlay(MissingnessAwareOverlay):
         Returns:
         - dict with imbalance flag, class counts, and imbalance ratio
         """
-        y = np.array(self.df[self.target])
-        if y.ndim == 0:
-            raise ValueError("Target must be array-like, not scalar.")
-        y = np.ravel(y)
+        labels = self.df[self.target]
+        # NaN != NaN, so Counter would count every missing label as its own class
+        missing_labels = int(labels.isna().sum())
+        y = labels.dropna().to_numpy()
 
         class_counts = Counter(y)
         total = sum(class_counts.values())
@@ -139,12 +132,16 @@ class SharedOverlay(MissingnessAwareOverlay):
             plt.tight_layout()
             plt.show()
 
-        return {
+        result = {
             "is_imbalanced": is_imbalanced,
             "class_counts": dict(class_counts),
             "imbalance_ratio": round(imbalance_ratio, 3),
             "threshold": threshold
         }
+        if missing_labels:
+            result["missing_labels"] = missing_labels
+            result["notes"] = f"{missing_labels} rows with a missing target label were excluded."
+        return result
     
     def check_scaling(self, threshold=10.0):
         """
