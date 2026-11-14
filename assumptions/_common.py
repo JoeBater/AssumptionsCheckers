@@ -12,6 +12,9 @@ NO_ALGORITHM_NOTE = (
 VERDICT_KEYS = {
     "linearity", "homoscedasticity", "normality", "has_multicollinearity",
     "scaling_needed", "tree_suitability", "separable", "is_imbalanced",
+    # clustering
+    "has_noise", "distances_concentrated", "has_cluster_tendency", "non_globular",
+    "unequal_variance", "varying_density", "elongated", "has_tied_values",
 }
 
 
@@ -67,7 +70,7 @@ def print_check_result(result):
 class BaseAssumptionsChecker:
     """Shared plumbing for the model-family checkers: missingness summary, ranking and reporting."""
 
-    def __init__(self, df, target, algorithm=None):
+    def __init__(self, df, target=None, algorithm=None):
         # Overlays normalise missing-value tokens in place, so never touch the caller's frame
         self.df = df.copy()
         self.target = target
@@ -172,6 +175,9 @@ class BaseAssumptionsChecker:
 
             if isinstance(result, dict):
                 print_check_result(result)
+            elif isinstance(result, list):
+                for item in result:
+                    print(f"  - {item}")
             else:
                 print(result)
 
