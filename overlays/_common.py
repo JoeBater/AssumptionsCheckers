@@ -72,6 +72,11 @@ class MissingnessAwareOverlay:
             self.df[col] = cleaned
 
     @property
+    def features(self):
+        """All columns except the target; the whole frame when there is no target (clustering)."""
+        return self.df if self.target is None else self.df.drop(columns=[self.target])
+
+    @property
     def working_df(self):
         """The complete-case subset when missingness exists, otherwise the full frame."""
         return self.df_no_missing if self.row_missing_frac > 0 else self.df

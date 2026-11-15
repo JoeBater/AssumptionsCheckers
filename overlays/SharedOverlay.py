@@ -25,7 +25,7 @@ class SharedOverlay(MissingnessAwareOverlay):
         """Check multicollinearity using VIF, only if 2+ predictors.
         Returns diagnostics and minimal drop set recommendation.
         """
-        X = self.df.drop(columns=[self.target])
+        X = self.features
 
         if X.isna().any().any():
             return {
@@ -80,7 +80,7 @@ class SharedOverlay(MissingnessAwareOverlay):
         }
 
     def check_tree_suitability(self):
-        X = self.df.drop(columns=[self.target])
+        X = self.features
         n_samples, n_features = X.shape
 
         issues = []
@@ -154,7 +154,7 @@ class SharedOverlay(MissingnessAwareOverlay):
         Returns:
         - dict with scaling flag, ratios, feature details, recommendations, and notes
         """
-        X = self.df.drop(columns=[self.target])
+        X = self.features
         X_numeric = X.select_dtypes(include=[np.number])
         
         if X_numeric.empty:

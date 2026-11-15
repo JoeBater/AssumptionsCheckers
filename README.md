@@ -6,6 +6,7 @@ AssumptionsCheckers is a modular toolkit for checking whether your data suits th
 
 - ✅ **Regression diagnostics:** linearity (RESET test), homoscedasticity (Breusch–Pagan), multicollinearity (VIF with a suggested drop set), residual normality (Shapiro–Wilk), scaling, tree suitability
 - ✅ **Classification diagnostics:** class imbalance, multicollinearity, scaling, feature redundancy (correlation and mutual information), class separability (PCA or t-SNE projection)
+- ✅ **Clustering diagnostics (no target):** cluster shape (globular, ellipsoidal or non-convex), unequal cluster spread, elongation, density variation, noise and outliers, heavily repeated values, clustering tendency (Hopkins), distance concentration in high dimensions, scale disparity, duplicates, sample size and mixed data types
 - ✅ **Model recommendations:** name an algorithm to check its specific assumptions, or leave it out to run every check and get a ranked list of candidate models
 - ✅ **Data integrity checks:** missingness (with MCAR/MAR hints), whitespace and null-like tokens, constant and near-constant columns, high cardinality, duplicate rows, embedded delimited rows
 - ✅ **Exploratory checks:** missing values, outliers (z-score, IQR or modified z-score, chosen per column), with suggested cleaning code
@@ -36,6 +37,21 @@ Leave out `algorithm` to run every check and rank candidate models. Supported al
 |---|---|
 | `RegressionAssumptionsChecker` | `LinearRegression`, `Ridge`, `Lasso`, `ElasticNet`, `SVR`, `KNeighborsRegressor`, `DecisionTreeRegressor`, `RandomForestRegressor`, `GradientBoostingRegressor` |
 | `ClassificationAssumptionsChecker` | `LogisticRegression`, `SVC`, `KNeighborsClassifier`, `DecisionTreeClassifier`, `RandomForestClassifier`, `GradientBoostingClassifier` |
+| `ClusteringAssumptionsChecker` | `KMeans`, `MiniBatchKMeans`, `AgglomerativeClustering`, `DBSCAN`, `OPTICS`, `GaussianMixture`, `SpectralClustering` |
+
+For clustering there is no target, so every column is treated as a feature:
+
+```python
+from assumptions import ClusteringAssumptionsChecker
+
+checker = ClusteringAssumptionsChecker(df, algorithm="KMeans")  # aliases like "GMM" also work
+checker.check_assumptions()      # status, reason and advice for K-Means
+checker.report_assumptions()
+
+ClusteringAssumptionsChecker(df).recommend_models()  # rank every algorithm
+```
+
+The checker has no labels to go on, so it infers cluster structure from the data. It finds density-connected regions, then checks whether K-Means or a Gaussian mixture reproduces them. It also fits a Gaussian mixture chosen by BIC to compare the clusters' spread, elongation and density. `clustering_examples.ipynb` shows it on blobs, moons, circles and other datasets whose geometry is known. `notebooks/clustering_examples.ipynb` runs it on three UCI datasets (Online Retail, Human Activity Recognition and Obesity Levels).
 
 For data integrity:
 
@@ -57,6 +73,7 @@ AssumptionsCheckers/
 ├── assumptions/            # Checkers: the entry points you call
 │   ├── RegressionAssumptionsChecker.py
 │   ├── ClassificationAssumptionsChecker.py
+│   ├── ClusteringAssumptionsChecker.py
 │   ├── DataIntegrityChecker.py
 │   ├── ExploratoryDataChecker.py
 │   └── _common.py          # Shared checker base class and reporting
@@ -89,7 +106,8 @@ nbstripout --install --keep-output --extra-keys "metadata.kernelspec metadata.la
 - [ ] Distributional diagnostics: skewness, outlier and drift checks (`overlays/DistributionalDiagnosticsOverlay.py`)
 - [ ] Column confidence and trust scoring (`overlays/ConfidenceTrustOverlay.py`)
 - [ ] Text data assumptions (`assumptions/TextAssumptionsChecker.py`)
-- [ ] Clustering validation
+- [x] Clustering diagnostics: KMeans, MiniBatchKMeans, Agglomerative, DBSCAN, OPTICS, GMM, Spectral
+- [ ] More clustering algorithms: HDBSCAN, K-Medoids
 - [ ] Time-series support
 - [ ] Interactive dashboard (streamlit or gradio)
 
